@@ -1,7 +1,6 @@
 package com.tim.workflow.orchestrator.scheduler;
 
 import java.time.Instant;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +42,11 @@ import io.kubernetes.client.openapi.ApiException;
 public class WorkflowScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(WorkflowScheduler.class);
+
+    /** Statuses polled each scheduler sweep ({@link WorkflowExecutionStatus#CREATED} is promoted inside {@link #processExecution}). */
+    private static final List<WorkflowExecutionStatus> SCHEDULER_ACTIVE_STATUSES = List.of(
+            WorkflowExecutionStatus.CREATED,
+            WorkflowExecutionStatus.RUNNING);
 
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
@@ -100,13 +104,29 @@ public class WorkflowScheduler {
         if (!tickEnabled) {
             return;
         }
+        runPollCycle();
+    }
+
+    /**
+     * One scheduling sweep: load active executions and process each. Exposed for integration tests
+     * ({@code workflow.scheduler.tick-enabled=false} disables {@link #tick()} only).
+     */
+    public void runPollCycle() {
         io.micrometer.core.instrument.Timer.Sample sample = workflowMetrics.startSchedulerLoopSample();
         try {
-            List<WorkflowExecution> active = workflowExecutionRepository.findByStatusIn(
-                    EnumSet.of(WorkflowExecutionStatus.CREATED, WorkflowExecutionStatus.RUNNING));
+            log.info("Scheduler querying active executions statuses={}", SCHEDULER_ACTIVE_STATUSES);
+            List<WorkflowExecution> active =
+                    workflowExecutionRepository.findActiveForScheduler(SCHEDULER_ACTIVE_STATUSES);
+            log.info("Scheduler query finished activeExecutions={}", active.size());
+            if (log.isDebugEnabled()) {
+                log.debug(
+                        "Scheduler active execution ids={}",
+                        active.stream().map(WorkflowExecution::getId).toList());
+            }
+
             WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_STARTED");
             try {
-                log.info("Scheduler loop started activeExecutions={}", active.size());
+                log.debug("Scheduler loop dispatch phase starting");
             } finally {
                 WorkflowLogContext.clear();
             }
