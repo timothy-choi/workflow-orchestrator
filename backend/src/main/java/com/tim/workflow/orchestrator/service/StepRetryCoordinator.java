@@ -140,7 +140,8 @@ public class StepRetryCoordinator {
                 execution.setStatus(WorkflowExecutionStatus.FAILED)
                         .setFinishedAt(now)
                         .setUpdatedAt(now)
-                        .setPausedAt(null);
+                        .setPausedAt(null)
+                        .setPauseRequested(false);
                 workflowExecutionRepository.save(execution);
 
                 executionEventRepository.save(new ExecutionEvent()

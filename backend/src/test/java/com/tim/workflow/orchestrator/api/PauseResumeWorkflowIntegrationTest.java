@@ -70,6 +70,7 @@ class PauseResumeWorkflowIntegrationTest {
 
         ExecutionResponse paused = executionService.pauseExecution(executionId);
         assertThat(paused.getStatus()).isEqualTo(WorkflowExecutionStatus.PAUSED);
+        assertThat(paused.isPauseRequested()).isTrue();
         assertThat(paused.getPausedAt()).isNotNull();
         assertThat(paused.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_PAUSED)
@@ -111,6 +112,7 @@ class PauseResumeWorkflowIntegrationTest {
 
         ExecutionResponse resumed = executionService.resumeExecution(executionId);
         assertThat(resumed.getStatus()).isEqualTo(WorkflowExecutionStatus.RUNNING);
+        assertThat(resumed.isPauseRequested()).isFalse();
         assertThat(resumed.getPausedAt()).isNull();
         assertThat(resumed.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_RESUMED)
@@ -151,7 +153,71 @@ class PauseResumeWorkflowIntegrationTest {
     }
 
     @Test
-    void callbackWhilePaused_whenOnlyStepFinishes_executionBecomesSucceeded() throws Exception {
+    void pause_afterStepASuccessCallback_beforeSchedulerDispatchesB_keepsBpendingAndPaused() throws Exception {
+        Long workflowId = createWorkflow(step("A", List.of()), step("B", List.of("A")));
+        Long executionId = executionService.createExecution(workflowId).getId();
+
+        WorkflowExecution ex = workflowExecutionRepository.findById(executionId).orElseThrow();
+        ex.setStatus(WorkflowExecutionStatus.RUNNING);
+        workflowExecutionRepository.save(ex);
+
+        List<StepExecution> steps = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
+        steps.get(0).setStatus(StepExecutionStatus.RUNNING).setStartedAt(Instant.now());
+        steps.get(1).setStatus(StepExecutionStatus.PENDING);
+        stepExecutionRepository.save(steps.get(0));
+        stepExecutionRepository.save(steps.get(1));
+
+        postSuccess(executionId, steps.get(0).getId());
+
+        ExecutionResponse afterA = executionService.getExecution(executionId);
+        assertThat(afterA.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.SUCCESS);
+        assertThat(afterA.getSteps().get(1).getStatus()).isEqualTo(StepExecutionStatus.PENDING);
+        assertThat(afterA.getStatus()).isEqualTo(WorkflowExecutionStatus.RUNNING);
+
+        executionService.pauseExecution(executionId);
+
+        workflowScheduler.processExecution(executionId);
+
+        ExecutionResponse fin = executionService.getExecution(executionId);
+        assertThat(fin.getStatus()).isEqualTo(WorkflowExecutionStatus.PAUSED);
+        assertThat(fin.isPauseRequested()).isTrue();
+        assertThat(fin.getSteps().get(1).getStatus()).isEqualTo(StepExecutionStatus.PENDING);
+        assertThat(fin.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_PAUSED)
+                .hasSize(1);
+    }
+
+    @Test
+    void pauseAndSchedulerConcurrent_rowLockSerializesPauseBeforeDispatch() throws Exception {
+        Long executionId = createLinearExecutionWithArunningBpending();
+
+        java.util.concurrent.CyclicBarrier barrier = new java.util.concurrent.CyclicBarrier(2);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            java.util.concurrent.Future<?> pauseDone = pool.submit(() -> {
+                barrier.await();
+                executionService.pauseExecution(executionId);
+                return null;
+            });
+            java.util.concurrent.Future<?> schedDone = pool.submit(() -> {
+                barrier.await();
+                workflowScheduler.processExecution(executionId);
+                return null;
+            });
+            pauseDone.get(60, java.util.concurrent.TimeUnit.SECONDS);
+            schedDone.get(60, java.util.concurrent.TimeUnit.SECONDS);
+        } finally {
+            pool.shutdown();
+        }
+
+        ExecutionResponse r = executionService.getExecution(executionId);
+        assertThat(r.getStatus()).isEqualTo(WorkflowExecutionStatus.PAUSED);
+        assertThat(r.isPauseRequested()).isTrue();
+        assertThat(r.getSteps().get(1).getStatus()).isEqualTo(StepExecutionStatus.PENDING);
+    }
+
+    @Test
+    void callbackWhilePaused_whenOnlyStepFinishes_staysPausedUntilResume() throws Exception {
         Long workflowId = createWorkflow(step("only", List.of()));
         Long executionId = executionService.createExecution(workflowId).getId();
         StepExecution step = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId).get(0);
@@ -166,9 +232,18 @@ class PauseResumeWorkflowIntegrationTest {
 
         postSuccess(executionId, step.getId());
 
+        ExecutionResponse afterCb = executionService.getExecution(executionId);
+        assertThat(afterCb.getStatus()).isEqualTo(WorkflowExecutionStatus.PAUSED);
+        assertThat(afterCb.isPauseRequested()).isTrue();
+        assertThat(afterCb.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.SUCCESS);
+
+        executionService.resumeExecution(executionId);
+        workflowScheduler.processExecution(executionId);
+
         ExecutionResponse done = executionService.getExecution(executionId);
         assertThat(done.getStatus()).isEqualTo(WorkflowExecutionStatus.SUCCEEDED);
         assertThat(done.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.SUCCESS);
+        assertThat(done.isPauseRequested()).isFalse();
         assertThat(done.getPausedAt()).isNull();
     }
 

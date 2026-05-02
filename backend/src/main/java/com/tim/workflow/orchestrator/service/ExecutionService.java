@@ -104,6 +104,7 @@ public class ExecutionService {
                 .setWorkflowId(workflow.getId())
                 .setWorkflowVersionId(version.getId())
                 .setStatus(WorkflowExecutionStatus.CREATED)
+                .setPauseRequested(false)
                 .setCancelRequested(false)
                 .setCreatedAt(now)
                 .setUpdatedAt(now);
@@ -208,6 +209,7 @@ public class ExecutionService {
         Instant now = Instant.now();
         execution.setStatus(WorkflowExecutionStatus.PAUSED)
                 .setPausedAt(now)
+                .setPauseRequested(true)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
@@ -240,6 +242,7 @@ public class ExecutionService {
         Instant now = Instant.now();
         execution.setStatus(WorkflowExecutionStatus.RUNNING)
                 .setPausedAt(null)
+                .setPauseRequested(false)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
@@ -277,6 +280,7 @@ public class ExecutionService {
                 .setCancelledAt(now)
                 .setFinishedAt(now)
                 .setPausedAt(null)
+                .setPauseRequested(false)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
@@ -511,6 +515,7 @@ public class ExecutionService {
                 execution.getUpdatedAt(),
                 execution.getFinishedAt(),
                 execution.getPausedAt(),
+                execution.isPauseRequested(),
                 execution.isCancelRequested(),
                 execution.getCancelledAt(),
                 stepResponses,
