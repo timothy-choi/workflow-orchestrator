@@ -31,3 +31,4 @@ orchestrator:
     token: dev-token-change-me
   kubernetes:
     namespace: default
+    worker-image: workflow-python-worker:local

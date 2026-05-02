@@ -69,12 +69,25 @@ public class OrchestratorProperties {
 
         private String namespace = "default";
 
+        /**
+         * Container image for step Jobs: Python worker that runs {@code STEP_COMMAND} and callbacks to the API.
+         */
+        private String workerImage = "workflow-python-worker:local";
+
         public String getNamespace() {
             return namespace;
         }
 
         public void setNamespace(String namespace) {
             this.namespace = namespace;
+        }
+
+        public String getWorkerImage() {
+            return workerImage;
+        }
+
+        public void setWorkerImage(String workerImage) {
+            this.workerImage = workerImage;
         }
     }
 }
