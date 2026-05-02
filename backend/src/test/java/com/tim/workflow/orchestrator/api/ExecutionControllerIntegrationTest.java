@@ -69,6 +69,29 @@ class ExecutionControllerIntegrationTest {
         mockMvc.perform(get("/executions/999999999")).andExpect(status().isNotFound());
     }
 
+    @Test
+    void listExecutionEvents_returnsEventsOrderedByCreatedAt() throws Exception {
+        long workflowId = createWorkflow("exec-events-api-wf");
+
+        String createExecJson = mockMvc.perform(post("/executions").param("workflowId", String.valueOf(workflowId)))
+                .andExpect(status().isOk())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        long executionId = objectMapper.readTree(createExecJson).get("id").asLong();
+
+        mockMvc.perform(get("/executions/" + executionId + "/events"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].eventType").value("EXECUTION_CREATED"))
+                .andExpect(jsonPath("$[0].createdAt").exists());
+    }
+
+    @Test
+    void listExecutionEvents_unknownExecution_returnsNotFound() throws Exception {
+        mockMvc.perform(get("/executions/999999999/events")).andExpect(status().isNotFound());
+    }
+
     private long createWorkflow(String name) throws Exception {
         ObjectNode stepA = objectMapper.createObjectNode();
         stepA.put("name", "step-a");
