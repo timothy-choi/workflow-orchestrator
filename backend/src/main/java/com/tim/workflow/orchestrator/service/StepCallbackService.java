@@ -5,6 +5,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +24,8 @@ import com.tim.workflow.orchestrator.domain.WorkflowExecution;
 import com.tim.workflow.orchestrator.domain.WorkflowExecutionStatus;
 import com.tim.workflow.orchestrator.dto.StepResultRequest;
 import com.tim.workflow.orchestrator.dto.StepResultRequest.StepResultStatus;
+import com.tim.workflow.orchestrator.logging.WorkflowLogContext;
+import com.tim.workflow.orchestrator.metrics.WorkflowMetrics;
 import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
@@ -29,12 +33,15 @@ import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
 @Service
 public class StepCallbackService {
 
+    private static final Logger log = LoggerFactory.getLogger(StepCallbackService.class);
+
     private final OrchestratorProperties orchestratorProperties;
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final StepExecutionRepository stepExecutionRepository;
     private final ExecutionEventRepository executionEventRepository;
     private final StepRetryCoordinator stepRetryCoordinator;
     private final ObjectMapper objectMapper;
+    private final WorkflowMetrics workflowMetrics;
 
     public StepCallbackService(
             OrchestratorProperties orchestratorProperties,
@@ -42,7 +49,8 @@ public class StepCallbackService {
             StepExecutionRepository stepExecutionRepository,
             ExecutionEventRepository executionEventRepository,
             StepRetryCoordinator stepRetryCoordinator,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            WorkflowMetrics workflowMetrics
     ) {
         this.orchestratorProperties = orchestratorProperties;
         this.workflowExecutionRepository = workflowExecutionRepository;
@@ -50,6 +58,7 @@ public class StepCallbackService {
         this.executionEventRepository = executionEventRepository;
         this.stepRetryCoordinator = stepRetryCoordinator;
         this.objectMapper = objectMapper;
+        this.workflowMetrics = workflowMetrics;
     }
 
     @Transactional
@@ -73,12 +82,14 @@ public class StepCallbackService {
         Instant now = Instant.now();
 
         if (execution.getStatus() == WorkflowExecutionStatus.CANCELLED || execution.isCancelRequested()) {
+            workflowMetrics.recordCallbackIgnored("EXECUTION_CANCELLED");
             recordIgnoredCallback(execution.getId(), ExecutionEventType.CALLBACK_IGNORED_EXECUTION_CANCELLED,
                     step.getStepName(), body, now);
             return StepCallbackOutcome.IGNORED_CANCELLED;
         }
 
         if (step.getStatus() == StepExecutionStatus.CANCELLED) {
+            workflowMetrics.recordCallbackIgnored("STEP_CANCELLED");
             recordIgnoredCallback(execution.getId(), ExecutionEventType.CALLBACK_IGNORED_STEP_CANCELLED,
                     step.getStepName(), body, now);
             return StepCallbackOutcome.IGNORED_CANCELLED;
@@ -101,6 +112,13 @@ public class StepCallbackService {
                     .setEventType(ExecutionEventType.CALLBACK_RECEIVED)
                     .setPayload(callbackReceivedPayload(step.getStepName(), body))
                     .setCreatedAt(now));
+            workflowMetrics.recordCallbackReceived("SUCCESS");
+            WorkflowLogContext.put(execution.getId(), step.getId(), execution.getWorkflowId(), step.getK8sJobName(), "CALLBACK_RECEIVED");
+            try {
+                log.info("Callback received stepName={} status=SUCCESS", step.getStepName());
+            } finally {
+                WorkflowLogContext.clear();
+            }
             completeStepSuccess(execution, step, body, now);
             return StepCallbackOutcome.ACCEPTED;
         }
@@ -108,6 +126,18 @@ public class StepCallbackService {
         // FAILED callback
         if (step.getStatus() != StepExecutionStatus.RUNNING) {
             return StepCallbackOutcome.ACCEPTED;
+        }
+        executionEventRepository.save(new ExecutionEvent()
+                .setWorkflowExecutionId(execution.getId())
+                .setEventType(ExecutionEventType.CALLBACK_RECEIVED)
+                .setPayload(callbackReceivedPayload(step.getStepName(), body))
+                .setCreatedAt(now));
+        workflowMetrics.recordCallbackReceived("FAILED");
+        WorkflowLogContext.put(execution.getId(), step.getId(), execution.getWorkflowId(), step.getK8sJobName(), "CALLBACK_RECEIVED");
+        try {
+            log.info("Callback received stepName={} status=FAILED", step.getStepName());
+        } finally {
+            WorkflowLogContext.clear();
         }
         stepRetryCoordinator.handleFailureFromCallback(execution, step, body.getMessage(), now);
         return StepCallbackOutcome.ACCEPTED;
@@ -179,11 +209,14 @@ public class StepCallbackService {
             StepResultRequest body,
             Instant now
     ) {
+        Instant startedAtSnapshot = step.getStartedAt();
         step.setStatus(StepExecutionStatus.SUCCESS)
                 .setFinishedAt(now)
                 .setUpdatedAt(now)
                 .setFailureReason(null);
         stepExecutionRepository.save(step);
+
+        workflowMetrics.recordStepTerminal(step.getStepName(), "SUCCESS", startedAtSnapshot, now);
 
         executionEventRepository.save(new ExecutionEvent()
                 .setWorkflowExecutionId(execution.getId())
@@ -223,6 +256,8 @@ public class StepCallbackService {
                     .setFinishedAt(now)
                     .setUpdatedAt(now);
             workflowExecutionRepository.save(exec);
+
+            workflowMetrics.recordWorkflowTerminal(exec.getWorkflowId(), WorkflowExecutionStatus.SUCCEEDED, exec.getCreatedAt(), now);
 
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(executionId)

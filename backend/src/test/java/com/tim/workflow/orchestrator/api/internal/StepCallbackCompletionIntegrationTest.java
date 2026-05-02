@@ -15,6 +15,8 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+
+import io.micrometer.core.instrument.MeterRegistry;
 import com.tim.workflow.orchestrator.domain.ExecutionEventType;
 import com.tim.workflow.orchestrator.domain.StepExecutionStatus;
 import com.tim.workflow.orchestrator.domain.WorkflowExecutionStatus;
@@ -46,6 +48,9 @@ class StepCallbackCompletionIntegrationTest {
 
     @Autowired
     private StepExecutionRepository stepExecutionRepository;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @Test
     void callbackSuccess_whenAllStepsRunning_thenExecutionSucceeded() throws Exception {
@@ -99,6 +104,68 @@ class StepCallbackCompletionIntegrationTest {
     }
 
     @Test
+    void callbackSuccess_incrementsCallbackReceivedSuccessMetric() throws Exception {
+        Long workflowId = createWorkflow(step("metric-success", List.of()));
+        Long executionId = executionService.createExecution(workflowId).getId();
+        long stepId = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId).get(0).getId();
+        stepExecutionRepository.findById(stepId).ifPresent(s -> {
+            s.setStatus(StepExecutionStatus.RUNNING);
+            stepExecutionRepository.save(s);
+        });
+
+        double before = meterRegistry.counter("callbacks.received.total", "status", "SUCCESS").count();
+        postSuccess(executionId, stepId);
+        assertThat(meterRegistry.counter("callbacks.received.total", "status", "SUCCESS").count()).isGreaterThan(before);
+    }
+
+    @Test
+    void callbackFailed_incrementsCallbackReceivedFailedMetric() throws Exception {
+        Long workflowId = createWorkflow(step("metric-failed", List.of()));
+        Long executionId = executionService.createExecution(workflowId).getId();
+        long stepId = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId).get(0).getId();
+        stepExecutionRepository.findById(stepId).ifPresent(s -> {
+            s.setStatus(StepExecutionStatus.RUNNING);
+            s.setMaxRetries(0);
+            stepExecutionRepository.save(s);
+        });
+
+        double before = meterRegistry.counter("callbacks.received.total", "status", "FAILED").count();
+        postFailed(executionId, stepId, "boom");
+        assertThat(meterRegistry.counter("callbacks.received.total", "status", "FAILED").count()).isGreaterThan(before);
+    }
+
+    @Test
+    void callbackWhenCancelled_incrementsIgnoredMetric() throws Exception {
+        Long workflowId = createWorkflow(step("metric-ignored", List.of()));
+        Long executionId = executionService.createExecution(workflowId).getId();
+        long stepId = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId).get(0).getId();
+        stepExecutionRepository.findById(stepId).ifPresent(s -> {
+            s.setStatus(StepExecutionStatus.RUNNING);
+            stepExecutionRepository.save(s);
+        });
+
+        mockMvc.perform(post("/executions/" + executionId + "/cancel"))
+                .andExpect(status().isOk());
+
+        double before = meterRegistry.counter("callbacks.ignored.total", "reason", "EXECUTION_CANCELLED").count();
+
+        StepResultRequest body = new StepResultRequest();
+        body.setExecutionId(executionId);
+        body.setStepExecutionId(stepId);
+        body.setStatus(StepResultStatus.SUCCESS);
+        body.setMessage("finished");
+
+        mockMvc.perform(post("/internal/step-results")
+                        .header(StepCallbackController.CALLBACK_TOKEN_HEADER, "test-callback-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isOk());
+
+        assertThat(meterRegistry.counter("callbacks.ignored.total", "reason", "EXECUTION_CANCELLED").count())
+                .isGreaterThan(before);
+    }
+
+    @Test
     void callbackWithWrongToken_returnsUnauthorized() throws Exception {
         Long workflowId = createWorkflow(step("only", List.of()));
         Long executionId = executionService.createExecution(workflowId).getId();
@@ -123,6 +190,20 @@ class StepCallbackCompletionIntegrationTest {
         body.setStepExecutionId(stepExecutionId);
         body.setStatus(StepResultStatus.SUCCESS);
         body.setMessage("finished");
+
+        mockMvc.perform(post("/internal/step-results")
+                        .header(StepCallbackController.CALLBACK_TOKEN_HEADER, "test-callback-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(body)))
+                .andExpect(status().isAccepted());
+    }
+
+    private void postFailed(Long executionId, long stepExecutionId, String message) throws Exception {
+        StepResultRequest body = new StepResultRequest();
+        body.setExecutionId(executionId);
+        body.setStepExecutionId(stepExecutionId);
+        body.setStatus(StepResultStatus.FAILED);
+        body.setMessage(message);
 
         mockMvc.perform(post("/internal/step-results")
                         .header(StepCallbackController.CALLBACK_TOKEN_HEADER, "test-callback-token")

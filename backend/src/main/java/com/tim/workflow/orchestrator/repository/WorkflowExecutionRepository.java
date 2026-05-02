@@ -18,6 +18,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
 
     List<WorkflowExecution> findByStatusIn(Collection<WorkflowExecutionStatus> statuses);
 
+    long countByStatusIn(Collection<WorkflowExecutionStatus> statuses);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT e FROM WorkflowExecution e WHERE e.id = :id")
     Optional<WorkflowExecution> findLockedById(@Param("id") Long id);

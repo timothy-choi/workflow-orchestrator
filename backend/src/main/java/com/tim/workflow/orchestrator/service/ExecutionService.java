@@ -6,6 +6,8 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,8 @@ import com.tim.workflow.orchestrator.dto.ExecutionResponse;
 import com.tim.workflow.orchestrator.dto.StepExecutionResponse;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
 import com.tim.workflow.orchestrator.k8s.KubernetesJobDeleter;
+import com.tim.workflow.orchestrator.logging.WorkflowLogContext;
+import com.tim.workflow.orchestrator.metrics.WorkflowMetrics;
 import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
@@ -39,6 +43,8 @@ import com.tim.workflow.orchestrator.repository.WorkflowVersionRepository;
 @Service
 public class ExecutionService {
 
+    private static final Logger log = LoggerFactory.getLogger(ExecutionService.class);
+
     private final WorkflowRepository workflowRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
     private final WorkflowExecutionRepository workflowExecutionRepository;
@@ -47,6 +53,7 @@ public class ExecutionService {
     private final ObjectMapper objectMapper;
     private final OrchestratorProperties orchestratorProperties;
     private final ObjectProvider<KubernetesJobDeleter> kubernetesJobDeleter;
+    private final WorkflowMetrics workflowMetrics;
 
     public ExecutionService(
             WorkflowRepository workflowRepository,
@@ -56,7 +63,8 @@ public class ExecutionService {
             ExecutionEventRepository executionEventRepository,
             ObjectMapper objectMapper,
             OrchestratorProperties orchestratorProperties,
-            ObjectProvider<KubernetesJobDeleter> kubernetesJobDeleter
+            ObjectProvider<KubernetesJobDeleter> kubernetesJobDeleter,
+            WorkflowMetrics workflowMetrics
     ) {
         this.workflowRepository = workflowRepository;
         this.workflowVersionRepository = workflowVersionRepository;
@@ -66,6 +74,7 @@ public class ExecutionService {
         this.objectMapper = objectMapper;
         this.orchestratorProperties = orchestratorProperties;
         this.kubernetesJobDeleter = kubernetesJobDeleter;
+        this.workflowMetrics = workflowMetrics;
     }
 
     @Transactional
@@ -123,6 +132,13 @@ public class ExecutionService {
                 .setCreatedAt(now);
         executionEventRepository.save(createdEvent);
 
+        WorkflowLogContext.put(savedExecution.getId(), null, workflow.getId(), null, "EXECUTION_CREATED");
+        try {
+            log.info("Execution created workflowVersionId={}", version.getId());
+        } finally {
+            WorkflowLogContext.clear();
+        }
+
         List<StepExecution> persistedSteps =
                 stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(savedExecution.getId());
         List<ExecutionEvent> persistedEvents =
@@ -142,6 +158,21 @@ public class ExecutionService {
                 executionEventRepository.findByWorkflowExecutionIdOrderByCreatedAtAsc(executionId);
 
         return toResponse(execution, steps, events);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ExecutionEventResponse> listExecutionEvents(Long executionId) {
+        workflowExecutionRepository.findById(executionId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Execution not found: " + executionId));
+
+        return executionEventRepository.findByWorkflowExecutionIdOrderByCreatedAtAsc(executionId).stream()
+                .map(e -> new ExecutionEventResponse(
+                        e.getId(),
+                        e.getEventType(),
+                        e.getPayload(),
+                        e.getCreatedAt()
+                ))
+                .toList();
     }
 
     @Transactional
@@ -166,6 +197,13 @@ public class ExecutionService {
                 .setEventType(ExecutionEventType.EXECUTION_PAUSED)
                 .setPayload("{}")
                 .setCreatedAt(now));
+
+        WorkflowLogContext.put(executionId, null, execution.getWorkflowId(), null, "EXECUTION_PAUSED");
+        try {
+            log.info("Execution paused");
+        } finally {
+            WorkflowLogContext.clear();
+        }
 
         return loadFullResponse(executionId);
     }
@@ -192,6 +230,13 @@ public class ExecutionService {
                 .setPayload("{}")
                 .setCreatedAt(now));
 
+        WorkflowLogContext.put(executionId, null, execution.getWorkflowId(), null, "EXECUTION_RESUMED");
+        try {
+            log.info("Execution resumed");
+        } finally {
+            WorkflowLogContext.clear();
+        }
+
         return loadFullResponse(executionId);
     }
 
@@ -216,11 +261,17 @@ public class ExecutionService {
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
+        Long workflowId = execution.getWorkflowId();
+        Instant createdAt = execution.getCreatedAt();
+        workflowMetrics.recordWorkflowTerminal(workflowId, WorkflowExecutionStatus.CANCELLED, createdAt, now);
+
         List<StepExecution> steps =
                 stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
         for (StepExecution step : steps) {
             if (step.getStatus() == StepExecutionStatus.PENDING
                     || step.getStatus() == StepExecutionStatus.RETRY_WAIT) {
+                Instant startedSnapshot = step.getStartedAt();
+                workflowMetrics.recordStepTerminal(step.getStepName(), "CANCELLED", startedSnapshot, now);
                 cancelStepRecord(step, now);
                 executionEventRepository.save(stepCancelledEvent(executionId, step.getStepName(), now));
             } else if (step.getStatus() == StepExecutionStatus.RUNNING) {
@@ -231,6 +282,8 @@ public class ExecutionService {
                         deleter.deleteJobIfPresent(step.getK8sJobName());
                     }
                 }
+                Instant startedSnapshot = step.getStartedAt();
+                workflowMetrics.recordStepTerminal(step.getStepName(), "CANCELLED", startedSnapshot, now);
                 cancelStepRecord(step, now);
                 executionEventRepository.save(stepCancelledEvent(executionId, step.getStepName(), now));
             }
@@ -241,6 +294,13 @@ public class ExecutionService {
                 .setEventType(ExecutionEventType.EXECUTION_CANCELLED)
                 .setPayload("{}")
                 .setCreatedAt(now));
+
+        WorkflowLogContext.put(executionId, null, workflowId, null, "EXECUTION_CANCELLED");
+        try {
+            log.info("Execution cancelled");
+        } finally {
+            WorkflowLogContext.clear();
+        }
 
         return loadFullResponse(executionId);
     }
@@ -286,6 +346,15 @@ public class ExecutionService {
                 .setEventType(ExecutionEventType.STEP_MANUAL_RETRY_REQUESTED)
                 .setPayload(stepPayloadJson(step.getStepName()))
                 .setCreatedAt(now));
+
+        workflowMetrics.recordStepRetry(step.getStepName());
+
+        WorkflowLogContext.put(execution.getId(), stepExecutionId, execution.getWorkflowId(), null, "STEP_MANUAL_RETRY_REQUESTED");
+        try {
+            log.info("Manual retry scheduled stepName={}", step.getStepName());
+        } finally {
+            WorkflowLogContext.clear();
+        }
 
         return loadFullResponse(execution.getId());
     }

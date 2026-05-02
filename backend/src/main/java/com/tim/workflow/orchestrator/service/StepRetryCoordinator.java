@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,12 +18,16 @@ import com.tim.workflow.orchestrator.domain.StepExecution;
 import com.tim.workflow.orchestrator.domain.StepExecutionStatus;
 import com.tim.workflow.orchestrator.domain.WorkflowExecution;
 import com.tim.workflow.orchestrator.domain.WorkflowExecutionStatus;
+import com.tim.workflow.orchestrator.logging.WorkflowLogContext;
+import com.tim.workflow.orchestrator.metrics.WorkflowMetrics;
 import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
 
 @Service
 public class StepRetryCoordinator {
+
+    private static final Logger log = LoggerFactory.getLogger(StepRetryCoordinator.class);
 
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final StepExecutionRepository stepExecutionRepository;
@@ -30,18 +36,22 @@ public class StepRetryCoordinator {
 
     private final int retryBackoffBaseSeconds;
 
+    private final WorkflowMetrics workflowMetrics;
+
     public StepRetryCoordinator(
             WorkflowExecutionRepository workflowExecutionRepository,
             StepExecutionRepository stepExecutionRepository,
             ExecutionEventRepository executionEventRepository,
             ObjectMapper objectMapper,
-            @Value("${workflow.scheduler.retry-backoff-base-seconds:10}") int retryBackoffBaseSeconds
+            @Value("${workflow.scheduler.retry-backoff-base-seconds:10}") int retryBackoffBaseSeconds,
+            WorkflowMetrics workflowMetrics
     ) {
         this.workflowExecutionRepository = workflowExecutionRepository;
         this.stepExecutionRepository = stepExecutionRepository;
         this.executionEventRepository = executionEventRepository;
         this.objectMapper = objectMapper;
         this.retryBackoffBaseSeconds = retryBackoffBaseSeconds;
+        this.workflowMetrics = workflowMetrics;
     }
 
     /**
@@ -83,6 +93,7 @@ public class StepRetryCoordinator {
         }
 
         if (step.getRetryCount() < step.getMaxRetries()) {
+            Instant attemptStart = step.getStartedAt();
             int newRetryCount = step.getRetryCount() + 1;
             step.setRetryCount(newRetryCount)
                     .setAttempt(step.getAttempt() + 1)
@@ -94,11 +105,21 @@ public class StepRetryCoordinator {
                     .setUpdatedAt(now);
             stepExecutionRepository.save(step);
 
+            workflowMetrics.recordStepRetry(step.getStepName());
+            workflowMetrics.recordStepRetryWaitDuration(step.getStepName(), attemptStart, now);
+
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(execution.getId())
                     .setEventType(ExecutionEventType.STEP_RETRY_SCHEDULED)
                     .setPayload(retryScheduledPayload(step.getStepName(), newRetryCount, step.getNextRetryAt()))
                     .setCreatedAt(now));
+
+            WorkflowLogContext.put(execution.getId(), step.getId(), execution.getWorkflowId(), null, "STEP_RETRY_SCHEDULED");
+            try {
+                log.info("Retry scheduled stepName={} retryCount={} nextRetryAt={}", step.getStepName(), newRetryCount, step.getNextRetryAt());
+            } finally {
+                WorkflowLogContext.clear();
+            }
         } else {
             step.setStatus(StepExecutionStatus.FAILED)
                     .setFailureReason(failureReason)
@@ -112,11 +133,27 @@ public class StepRetryCoordinator {
                     .setPayload(failurePayload(step.getStepName(), failureReason))
                     .setCreatedAt(now));
 
+            workflowMetrics.recordStepTerminal(step.getStepName(), "FAILED", step.getStartedAt(), now);
+
             if (execution.getStatus() == WorkflowExecutionStatus.RUNNING) {
                 execution.setStatus(WorkflowExecutionStatus.FAILED)
                         .setFinishedAt(now)
                         .setUpdatedAt(now);
                 workflowExecutionRepository.save(execution);
+
+                WorkflowExecution reloaded = workflowExecutionRepository.findById(execution.getId()).orElse(execution);
+                workflowMetrics.recordWorkflowTerminal(
+                        reloaded.getWorkflowId(),
+                        WorkflowExecutionStatus.FAILED,
+                        reloaded.getCreatedAt(),
+                        now);
+
+                WorkflowLogContext.put(execution.getId(), step.getId(), reloaded.getWorkflowId(), null, "EXECUTION_FAILED");
+                try {
+                    log.warn("Execution failed after step exhausted retries stepName={}", step.getStepName());
+                } finally {
+                    WorkflowLogContext.clear();
+                }
             }
         }
     }

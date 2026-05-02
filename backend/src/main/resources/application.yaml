@@ -34,3 +34,16 @@ orchestrator:
   kubernetes:
     namespace: default
     worker-image: workflow-python-worker:local
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  pattern:
+    console: "%d{yyyy-MM-dd'T'HH:mm:ss.SSSXXX} %-5level [%thread] %logger{36} executionId=%X{executionId:-} stepExecutionId=%X{stepExecutionId:-} workflowId=%X{workflowId:-} k8sJobName=%X{k8sJobName:-} eventType=%X{eventType:-} - %msg%n"

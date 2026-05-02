@@ -38,6 +38,8 @@ kind load docker-image workflow-python-worker:local
 kubectl apply -f deploy/k8s/rbac.yaml
 kubectl apply -f deploy/k8s/postgres.yaml
 kubectl apply -f deploy/k8s/backend.yaml
+kubectl apply -f deploy/k8s/prometheus.yaml
+kubectl apply -f deploy/k8s/grafana.yaml
 ```
 
 Wait until Postgres and the backend are ready:
@@ -54,6 +56,15 @@ The Service exposes port **8080** in the cluster. Port-forward to **8082** local
 ```bash
 kubectl port-forward svc/backend 8082:8080
 ```
+
+Optional observability stack (Prometheus scrapes `http://backend:8080/actuator/prometheus`; Grafana provisions a Prometheus datasource):
+
+```bash
+kubectl port-forward svc/prometheus 9090:9090
+kubectl port-forward svc/grafana 3000:3000
+```
+
+Default Grafana login in the manifest is `admin` / `admin`. Panel ideas and metric names: [docs/observability.md](docs/observability.md).
 
 More detail and troubleshooting: [deploy/kind/README.md](deploy/kind/README.md).
 

@@ -18,6 +18,8 @@ import com.tim.workflow.orchestrator.domain.ExecutionEvent;
 import com.tim.workflow.orchestrator.domain.ExecutionEventType;
 import com.tim.workflow.orchestrator.domain.StepExecution;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
+import com.tim.workflow.orchestrator.logging.WorkflowLogContext;
+import com.tim.workflow.orchestrator.metrics.WorkflowMetrics;
 import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 
@@ -43,6 +45,7 @@ public class KubernetesJobDispatcher {
     private final StepExecutionRepository stepExecutionRepository;
     private final ExecutionEventRepository executionEventRepository;
     private final ObjectMapper objectMapper;
+    private final WorkflowMetrics workflowMetrics;
 
     public KubernetesJobDispatcher(
             BatchV1Api batchV1Api,
@@ -50,7 +53,8 @@ public class KubernetesJobDispatcher {
             KubernetesJobNameFactory jobNameFactory,
             StepExecutionRepository stepExecutionRepository,
             ExecutionEventRepository executionEventRepository,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            WorkflowMetrics workflowMetrics
     ) {
         this.batchV1Api = batchV1Api;
         this.orchestratorProperties = orchestratorProperties;
@@ -58,13 +62,14 @@ public class KubernetesJobDispatcher {
         this.stepExecutionRepository = stepExecutionRepository;
         this.executionEventRepository = executionEventRepository;
         this.objectMapper = objectMapper;
+        this.workflowMetrics = workflowMetrics;
     }
 
     /**
      * Creates a Kubernetes Job for the step; step remains {@link com.tim.workflow.orchestrator.domain.StepExecutionStatus#RUNNING}
      * until the worker POSTs to the callback URL.
      */
-    public void dispatchJob(long workflowExecutionId, StepExecution step, WorkflowStepRequest stepDef)
+    public void dispatchJob(long workflowExecutionId, long workflowId, StepExecution step, WorkflowStepRequest stepDef)
             throws ApiException {
         String namespace = orchestratorProperties.getKubernetes().getNamespace();
         String jobName = jobNameFactory.jobName(workflowExecutionId, step.getId(), step.getAttempt());
@@ -124,14 +129,24 @@ public class KubernetesJobDispatcher {
                         .template(new V1PodTemplateSpec()
                                 .spec(podSpec)));
 
-        batchV1Api.createNamespacedJob(namespace, job).execute();
+        try {
+            batchV1Api.createNamespacedJob(namespace, job).execute();
+        } catch (ApiException e) {
+            workflowMetrics.recordKubernetesJobCreateFailure();
+            throw e;
+        }
 
         StepExecution managed = stepExecutionRepository.findById(step.getId()).orElseThrow();
         managed.setK8sJobName(jobName).setUpdatedAt(now);
         stepExecutionRepository.save(managed);
 
         saveJobEvent(workflowExecutionId, ExecutionEventType.JOB_CREATED, jobName, now);
-        log.info("Created Kubernetes Job {} in namespace {}", jobName, namespace);
+        WorkflowLogContext.put(workflowExecutionId, step.getId(), workflowId, jobName, "JOB_CREATED");
+        try {
+            log.info("Kubernetes Job created namespace={} jobName={}", namespace, jobName);
+        } finally {
+            WorkflowLogContext.clear();
+        }
     }
 
     private void saveJobEvent(Long executionId, ExecutionEventType type, String jobName, Instant now) {

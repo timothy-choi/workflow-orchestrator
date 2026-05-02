@@ -1,5 +1,7 @@
 package com.tim.workflow.orchestrator.api;
 
+import java.util.List;
+
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -7,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.tim.workflow.orchestrator.dto.ExecutionEventResponse;
 import com.tim.workflow.orchestrator.dto.ExecutionResponse;
 import com.tim.workflow.orchestrator.service.ExecutionService;
 
@@ -28,6 +31,11 @@ public class ExecutionController {
     @GetMapping("/{executionId}")
     public ExecutionResponse getExecution(@PathVariable Long executionId) {
         return executionService.getExecution(executionId);
+    }
+
+    @GetMapping("/{executionId}/events")
+    public List<ExecutionEventResponse> listExecutionEvents(@PathVariable Long executionId) {
+        return executionService.listExecutionEvents(executionId);
     }
 
     @PostMapping("/{executionId}/pause")

@@ -29,6 +29,8 @@ import com.tim.workflow.orchestrator.domain.WorkflowVersion;
 import com.tim.workflow.orchestrator.dto.CreateWorkflowRequest;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
 import com.tim.workflow.orchestrator.k8s.KubernetesJobDispatcher;
+import com.tim.workflow.orchestrator.logging.WorkflowLogContext;
+import com.tim.workflow.orchestrator.metrics.WorkflowMetrics;
 import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
@@ -53,6 +55,7 @@ public class WorkflowScheduler {
     private final StepRetryCoordinator stepRetryCoordinator;
     private final ObjectMapper objectMapper;
     private final WorkflowScheduler self;
+    private final WorkflowMetrics workflowMetrics;
 
     private final boolean tickEnabled;
 
@@ -68,6 +71,7 @@ public class WorkflowScheduler {
             StepRetryCoordinator stepRetryCoordinator,
             ObjectMapper objectMapper,
             @Lazy WorkflowScheduler self,
+            WorkflowMetrics workflowMetrics,
             @Value("${workflow.scheduler.tick-enabled:true}") boolean tickEnabled
     ) {
         this.workflowExecutionRepository = workflowExecutionRepository;
@@ -81,6 +85,7 @@ public class WorkflowScheduler {
         this.stepRetryCoordinator = stepRetryCoordinator;
         this.objectMapper = objectMapper;
         this.self = self;
+        this.workflowMetrics = workflowMetrics;
         this.tickEnabled = tickEnabled;
     }
 
@@ -95,14 +100,31 @@ public class WorkflowScheduler {
         if (!tickEnabled) {
             return;
         }
-        List<WorkflowExecution> active = workflowExecutionRepository.findByStatusIn(
-                EnumSet.of(WorkflowExecutionStatus.CREATED, WorkflowExecutionStatus.RUNNING));
-        for (WorkflowExecution execution : active) {
+        io.micrometer.core.instrument.Timer.Sample sample = workflowMetrics.startSchedulerLoopSample();
+        try {
+            List<WorkflowExecution> active = workflowExecutionRepository.findByStatusIn(
+                    EnumSet.of(WorkflowExecutionStatus.CREATED, WorkflowExecutionStatus.RUNNING));
+            WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_STARTED");
             try {
-                self.processExecution(execution.getId());
-            } catch (Exception e) {
-                log.warn("Scheduler failed for execution {}", execution.getId(), e);
+                log.info("Scheduler loop started activeExecutions={}", active.size());
+            } finally {
+                WorkflowLogContext.clear();
             }
+            for (WorkflowExecution execution : active) {
+                try {
+                    self.processExecution(execution.getId());
+                } catch (Exception e) {
+                    log.warn("Scheduler failed for execution {}", execution.getId(), e);
+                }
+            }
+            WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_COMPLETED");
+            try {
+                log.info("Scheduler loop completed");
+            } finally {
+                WorkflowLogContext.clear();
+            }
+        } finally {
+            workflowMetrics.stopSchedulerLoopSample(sample);
         }
     }
 
@@ -130,13 +152,20 @@ public class WorkflowScheduler {
             workflowExecutionRepository.save(execution);
         }
 
+        WorkflowLogContext.put(executionId, null, execution.getWorkflowId(), null, "PROCESS_EXECUTION");
+        try {
+            log.debug("Scheduler processing execution");
+        } finally {
+            WorkflowLogContext.clear();
+        }
+
         WorkflowVersion version = workflowVersionRepository.findById(execution.getWorkflowVersionId())
                 .orElseThrow(() -> new IllegalStateException(
                         "Workflow version not found: " + execution.getWorkflowVersionId()));
 
         CreateWorkflowRequest definition = parseDefinition(version.getDefinitionJson());
 
-        promoteRetryWaitSteps(executionId, execution.getStatus(), now);
+        promoteRetryWaitSteps(executionId, execution.getStatus(), now, execution.getWorkflowId());
         failTimedOutRunningSteps(execution, executionId, now);
 
         if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
@@ -201,6 +230,13 @@ public class WorkflowScheduler {
                         .setPayload(stepPayload(running.getStepName()))
                         .setCreatedAt(runStart));
 
+                WorkflowLogContext.put(executionId, running.getId(), inner.getWorkflowId(), running.getK8sJobName(), "STEP_CLAIMED");
+                try {
+                    log.info("Step claimed stepName={}", running.getStepName());
+                } finally {
+                    WorkflowLogContext.clear();
+                }
+
                 if (orchestratorProperties.getExecution().getMode() == ExecutionMode.LOCAL) {
                     localStepRunner.simulateSuccess(running);
 
@@ -215,6 +251,7 @@ public class WorkflowScheduler {
                             .setEventType(ExecutionEventType.STEP_SUCCEEDED)
                             .setPayload(stepPayload(running.getStepName()))
                             .setCreatedAt(runEnd));
+                    workflowMetrics.recordStepTerminal(running.getStepName(), "SUCCESS", runStart, runEnd);
                 } else {
                     KubernetesJobDispatcher dispatcher = kubernetesJobDispatcher.getIfAvailable();
                     if (dispatcher == null) {
@@ -222,7 +259,7 @@ public class WorkflowScheduler {
                                 "KubernetesJobDispatcher bean missing while orchestrator.execution.mode=kubernetes");
                     }
                     try {
-                        dispatcher.dispatchJob(executionId, running, stepDef);
+                        dispatcher.dispatchJob(executionId, inner.getWorkflowId(), running, stepDef);
                     } catch (ApiException e) {
                         throw new IllegalStateException("Failed to create Kubernetes Job: " + e.getMessage(), e);
                     }
@@ -248,6 +285,8 @@ public class WorkflowScheduler {
                     .setFinishedAt(finished);
             workflowExecutionRepository.save(latest);
 
+            workflowMetrics.recordWorkflowTerminal(latest.getWorkflowId(), WorkflowExecutionStatus.SUCCEEDED, latest.getCreatedAt(), finished);
+
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(executionId)
                     .setEventType(ExecutionEventType.EXECUTION_SUCCEEDED)
@@ -256,7 +295,7 @@ public class WorkflowScheduler {
         }
     }
 
-    private void promoteRetryWaitSteps(Long executionId, WorkflowExecutionStatus execStatus, Instant now) {
+    private void promoteRetryWaitSteps(Long executionId, WorkflowExecutionStatus execStatus, Instant now, Long workflowId) {
         if (execStatus == WorkflowExecutionStatus.PAUSED || execStatus == WorkflowExecutionStatus.CANCELLED) {
             return;
         }
@@ -279,6 +318,13 @@ public class WorkflowScheduler {
                     .setEventType(ExecutionEventType.STEP_RETRY_READY)
                     .setPayload(stepPayload(s.getStepName()))
                     .setCreatedAt(now));
+
+            WorkflowLogContext.put(executionId, s.getId(), workflowId, null, "STEP_RETRY_READY");
+            try {
+                log.info("Retry ready promoted to pending stepName={}", s.getStepName());
+            } finally {
+                WorkflowLogContext.clear();
+            }
         }
     }
 
@@ -300,6 +346,12 @@ public class WorkflowScheduler {
             Instant deadline = s.getStartedAt().plusSeconds(s.getTimeoutSeconds());
             if (!deadline.isBefore(now)) {
                 continue;
+            }
+            WorkflowLogContext.put(executionId, s.getId(), execution.getWorkflowId(), s.getK8sJobName(), "STEP_TIMED_OUT");
+            try {
+                log.warn("Step timed out stepName={} timeoutSeconds={}", s.getStepName(), s.getTimeoutSeconds());
+            } finally {
+                WorkflowLogContext.clear();
             }
             stepRetryCoordinator.handleFailureWithDiagnostic(
                     execution,
