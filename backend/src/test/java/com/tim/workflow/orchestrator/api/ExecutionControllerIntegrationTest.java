@@ -31,6 +31,20 @@ class ExecutionControllerIntegrationTest {
     private ObjectMapper objectMapper;
 
     @Test
+    void listExecutions_returnsSummariesNewestFirst() throws Exception {
+        long workflowId = createWorkflow("list-exec-wf");
+        mockMvc.perform(post("/executions").param("workflowId", String.valueOf(workflowId)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get("/executions").param("limit", "10"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].workflowId").value((int) workflowId))
+                .andExpect(jsonPath("$[0].status").exists())
+                .andExpect(jsonPath("$[0].createdAt").exists());
+    }
+
+    @Test
     void createAndGetExecution_roundTrip() throws Exception {
         long workflowId = createWorkflow("exec-round-trip-wf");
 

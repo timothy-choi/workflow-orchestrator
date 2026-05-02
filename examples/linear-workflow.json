@@ -1,0 +1,24 @@
+{
+  "name": "linear-demo",
+  "description": "Three steps run strictly in order (A → B → C).",
+  "steps": [
+    {
+      "name": "A",
+      "image": "busybox:latest",
+      "command": "echo step-A",
+      "dependencies": []
+    },
+    {
+      "name": "B",
+      "image": "busybox:latest",
+      "command": "echo step-B",
+      "dependencies": ["A"]
+    },
+    {
+      "name": "C",
+      "image": "busybox:latest",
+      "command": "echo step-C",
+      "dependencies": ["B"]
+    }
+  ]
+}

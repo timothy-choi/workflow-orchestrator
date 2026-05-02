@@ -1,0 +1,18 @@
+{
+  "name": "parallel-demo",
+  "description": "Two independent steps with no dependencies; scheduler may run them in parallel.",
+  "steps": [
+    {
+      "name": "left",
+      "image": "busybox:latest",
+      "command": "echo left-branch",
+      "dependencies": []
+    },
+    {
+      "name": "right",
+      "image": "busybox:latest",
+      "command": "echo right-branch",
+      "dependencies": []
+    }
+  ]
+}

@@ -9,6 +9,7 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,6 +30,7 @@ import com.tim.workflow.orchestrator.domain.WorkflowVersion;
 import com.tim.workflow.orchestrator.dto.CreateWorkflowRequest;
 import com.tim.workflow.orchestrator.dto.ExecutionEventResponse;
 import com.tim.workflow.orchestrator.dto.ExecutionResponse;
+import com.tim.workflow.orchestrator.dto.ExecutionSummaryResponse;
 import com.tim.workflow.orchestrator.dto.StepExecutionResponse;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
 import com.tim.workflow.orchestrator.k8s.KubernetesJobDeleter;
@@ -145,6 +147,21 @@ public class ExecutionService {
                 executionEventRepository.findByWorkflowExecutionIdOrderByCreatedAtAsc(savedExecution.getId());
 
         return toResponse(savedExecution, persistedSteps, persistedEvents);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ExecutionSummaryResponse> listRecentExecutions(int limit) {
+        int safe = Math.min(Math.max(limit, 1), 200);
+        return workflowExecutionRepository.findAllByOrderByCreatedAtDesc(PageRequest.of(0, safe))
+                .stream()
+                .map(e -> new ExecutionSummaryResponse(
+                        e.getId(),
+                        e.getWorkflowId(),
+                        e.getStatus(),
+                        e.getCreatedAt(),
+                        e.getFinishedAt()
+                ))
+                .toList();
     }
 
     @Transactional(readOnly = true)
