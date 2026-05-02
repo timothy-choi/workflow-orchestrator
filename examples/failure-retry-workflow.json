@@ -1,6 +1,6 @@
 {
   "name": "failure-retry-demo",
-  "description": "Step fails by exiting non-zero; orchestrator retries up to maxRetries (Kubernetes worker reports FAILED to callback). Local mode succeeds immediately unless you change the runner.",
+  "description": "Step fails by exiting non-zero; orchestrator retries up to maxRetries. Local mode runs the shell command; Kubernetes mode uses the worker callback.",
   "steps": [
     {
       "name": "flaky",
