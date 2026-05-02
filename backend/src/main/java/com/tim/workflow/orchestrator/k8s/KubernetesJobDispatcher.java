@@ -65,13 +65,14 @@ public class KubernetesJobDispatcher {
         env.add(new V1EnvVar().name("STEP_EXECUTION_ID").value(String.valueOf(step.getId())));
         env.add(new V1EnvVar().name("CALLBACK_URL").value(callbackUrl));
         env.add(new V1EnvVar().name("CALLBACK_TOKEN").value(orchestratorProperties.getCallback().getToken()));
+        env.add(new V1EnvVar().name("STEP_COMMAND").value(stepDef.getCommand()));
+        env.add(new V1EnvVar().name("STEP_TIMEOUT_SECONDS").value(String.valueOf(stepDef.getTimeoutSeconds())));
 
-        List<String> containerCommand = List.of("/bin/sh", "-c", stepDef.getCommand());
+        String workerImage = orchestratorProperties.getKubernetes().getWorkerImage();
 
         V1Container container = new V1Container()
                 .name("step")
-                .image(stepDef.getImage())
-                .command(containerCommand)
+                .image(workerImage)
                 .env(env);
 
         V1PodSpec podSpec = new V1PodSpec()
