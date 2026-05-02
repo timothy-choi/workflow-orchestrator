@@ -82,6 +82,13 @@ public class KubernetesJobStatusReconciler {
             return;
         }
 
+        WorkflowExecution execution = workflowExecutionRepository.findById(step.getWorkflowExecutionId()).orElse(null);
+        if (execution == null
+                || execution.getStatus() == WorkflowExecutionStatus.CANCELLED
+                || execution.isCancelRequested()) {
+            return;
+        }
+
         String ns = orchestratorProperties.getKubernetes().getNamespace();
         String jobName = step.getK8sJobName();
         Instant now = Instant.now();

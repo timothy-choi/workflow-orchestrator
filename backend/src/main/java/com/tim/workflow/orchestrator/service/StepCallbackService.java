@@ -53,7 +53,7 @@ public class StepCallbackService {
     }
 
     @Transactional
-    public void handleStepResult(StepResultRequest body, String callbackToken) {
+    public StepCallbackOutcome handleStepResult(StepResultRequest body, String callbackToken) {
         String expected = orchestratorProperties.getCallback().getToken();
         if (callbackToken == null || !expected.equals(callbackToken)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid or missing "
@@ -71,6 +71,19 @@ public class StepCallbackService {
         }
 
         Instant now = Instant.now();
+
+        if (execution.getStatus() == WorkflowExecutionStatus.CANCELLED || execution.isCancelRequested()) {
+            recordIgnoredCallback(execution.getId(), ExecutionEventType.CALLBACK_IGNORED_EXECUTION_CANCELLED,
+                    step.getStepName(), body, now);
+            return StepCallbackOutcome.IGNORED_CANCELLED;
+        }
+
+        if (step.getStatus() == StepExecutionStatus.CANCELLED) {
+            recordIgnoredCallback(execution.getId(), ExecutionEventType.CALLBACK_IGNORED_STEP_CANCELLED,
+                    step.getStepName(), body, now);
+            return StepCallbackOutcome.IGNORED_CANCELLED;
+        }
+
         if (execution.getStatus() == WorkflowExecutionStatus.CREATED) {
             execution.setStatus(WorkflowExecutionStatus.RUNNING).setUpdatedAt(now);
             workflowExecutionRepository.save(execution);
@@ -78,10 +91,10 @@ public class StepCallbackService {
 
         if (body.getStatus() == StepResultStatus.SUCCESS) {
             if (step.getStatus() == StepExecutionStatus.SUCCESS) {
-                return;
+                return StepCallbackOutcome.ACCEPTED;
             }
             if (step.getStatus() != StepExecutionStatus.RUNNING) {
-                return;
+                return StepCallbackOutcome.ACCEPTED;
             }
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(execution.getId())
@@ -89,25 +102,53 @@ public class StepCallbackService {
                     .setPayload(callbackReceivedPayload(step.getStepName(), body))
                     .setCreatedAt(now));
             completeStepSuccess(execution, step, body, now);
-            return;
+            return StepCallbackOutcome.ACCEPTED;
         }
 
         // FAILED callback
         if (step.getStatus() != StepExecutionStatus.RUNNING) {
-            return;
+            return StepCallbackOutcome.ACCEPTED;
         }
         stepRetryCoordinator.handleFailureFromCallback(execution, step, body.getMessage(), now);
+        return StepCallbackOutcome.ACCEPTED;
+    }
+
+    private void recordIgnoredCallback(
+            Long executionId,
+            ExecutionEventType type,
+            String stepName,
+            StepResultRequest body,
+            Instant now
+    ) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("stepName", stepName);
+        map.put("callbackStatus", body.getStatus().name());
+        map.put("message", body.getMessage());
+        String payload;
+        try {
+            payload = objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        executionEventRepository.save(new ExecutionEvent()
+                .setWorkflowExecutionId(executionId)
+                .setEventType(type)
+                .setPayload(payload)
+                .setCreatedAt(now));
     }
 
     /**
-     * Reconciler path when Kubernetes reports Job success but HTTP callback never arrived.
-     */
-    /**
      * Best-effort completion when the Job succeeded in Kubernetes but no HTTP callback arrived.
-     * Uses a regular load (no execution pessimistic lock) so callers such as the reconciler can hold locks safely.
      */
     @Transactional
     public void applyReconcilerJobSucceeded(Long executionId, Long stepExecutionId, String message, Instant now) {
+        WorkflowExecution execution = workflowExecutionRepository.findById(executionId).orElse(null);
+        if (execution == null
+                || execution.getStatus() == WorkflowExecutionStatus.CANCELLED
+                || execution.isCancelRequested()) {
+            return;
+        }
+
         StepExecution step = stepExecutionRepository.findById(stepExecutionId)
                 .orElseThrow(() -> new IllegalStateException("Step not found: " + stepExecutionId));
         if (!step.getWorkflowExecutionId().equals(executionId)) {
@@ -119,9 +160,6 @@ public class StepCallbackService {
         if (step.getStatus() != StepExecutionStatus.RUNNING) {
             return;
         }
-
-        WorkflowExecution execution = workflowExecutionRepository.findById(executionId)
-                .orElseThrow(() -> new IllegalStateException("Execution not found: " + executionId));
 
         executionEventRepository.save(new ExecutionEvent()
                 .setWorkflowExecutionId(executionId)

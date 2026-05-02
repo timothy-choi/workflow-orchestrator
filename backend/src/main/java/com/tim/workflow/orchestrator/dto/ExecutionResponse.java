@@ -14,6 +14,9 @@ public class ExecutionResponse {
     private final Instant createdAt;
     private final Instant updatedAt;
     private final Instant finishedAt;
+    private final Instant pausedAt;
+    private final boolean cancelRequested;
+    private final Instant cancelledAt;
     private final List<StepExecutionResponse> steps;
     private final List<ExecutionEventResponse> events;
 
@@ -25,6 +28,9 @@ public class ExecutionResponse {
             Instant createdAt,
             Instant updatedAt,
             Instant finishedAt,
+            Instant pausedAt,
+            boolean cancelRequested,
+            Instant cancelledAt,
             List<StepExecutionResponse> steps,
             List<ExecutionEventResponse> events
     ) {
@@ -35,6 +41,9 @@ public class ExecutionResponse {
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
         this.finishedAt = finishedAt;
+        this.pausedAt = pausedAt;
+        this.cancelRequested = cancelRequested;
+        this.cancelledAt = cancelledAt;
         this.steps = steps;
         this.events = events;
     }
@@ -65,6 +74,18 @@ public class ExecutionResponse {
 
     public Instant getFinishedAt() {
         return finishedAt;
+    }
+
+    public Instant getPausedAt() {
+        return pausedAt;
+    }
+
+    public boolean isCancelRequested() {
+        return cancelRequested;
+    }
+
+    public Instant getCancelledAt() {
+        return cancelledAt;
     }
 
     public List<StepExecutionResponse> getSteps() {
