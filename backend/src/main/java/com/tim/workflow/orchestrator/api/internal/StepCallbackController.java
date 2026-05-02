@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.tim.workflow.orchestrator.dto.StepResultRequest;
+import com.tim.workflow.orchestrator.service.StepCallbackOutcome;
 import com.tim.workflow.orchestrator.service.StepCallbackService;
 
 import jakarta.validation.Valid;
@@ -29,7 +30,10 @@ public class StepCallbackController {
             @Valid @RequestBody StepResultRequest body,
             @RequestHeader(value = CALLBACK_TOKEN_HEADER, required = false) String callbackToken
     ) {
-        stepCallbackService.handleStepResult(body, callbackToken);
+        StepCallbackOutcome outcome = stepCallbackService.handleStepResult(body, callbackToken);
+        if (outcome == StepCallbackOutcome.IGNORED_CANCELLED) {
+            return ResponseEntity.ok().build();
+        }
         return ResponseEntity.accepted().build();
     }
 }

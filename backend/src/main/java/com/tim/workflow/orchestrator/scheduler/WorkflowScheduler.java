@@ -114,6 +114,11 @@ public class WorkflowScheduler {
         WorkflowExecution execution = workflowExecutionRepository.findLockedById(executionId)
                 .orElseThrow(() -> new IllegalStateException("Workflow execution not found: " + executionId));
 
+        if (execution.getStatus() == WorkflowExecutionStatus.PAUSED
+                || execution.getStatus() == WorkflowExecutionStatus.CANCELLED) {
+            return;
+        }
+
         if (execution.getStatus() != WorkflowExecutionStatus.CREATED
                 && execution.getStatus() != WorkflowExecutionStatus.RUNNING) {
             return;
@@ -131,7 +136,7 @@ public class WorkflowScheduler {
 
         CreateWorkflowRequest definition = parseDefinition(version.getDefinitionJson());
 
-        promoteRetryWaitSteps(executionId, now);
+        promoteRetryWaitSteps(executionId, execution.getStatus(), now);
         failTimedOutRunningSteps(execution, executionId, now);
 
         if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
@@ -139,7 +144,12 @@ public class WorkflowScheduler {
         }
 
         while (true) {
-            if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+            workflowExecutionRepository.flush();
+            WorkflowExecution current = workflowExecutionRepository.findById(executionId).orElseThrow();
+            if (current.getStatus() == WorkflowExecutionStatus.CANCELLED || current.isCancelRequested()) {
+                break;
+            }
+            if (current.getStatus() == WorkflowExecutionStatus.FAILED) {
                 break;
             }
 
@@ -157,6 +167,12 @@ public class WorkflowScheduler {
 
             boolean progressed = false;
             for (WorkflowStepRequest stepDef : runnableDefs) {
+                workflowExecutionRepository.flush();
+                WorkflowExecution inner = workflowExecutionRepository.findById(executionId).orElseThrow();
+                if (inner.getStatus() == WorkflowExecutionStatus.CANCELLED || inner.isCancelRequested()) {
+                    break;
+                }
+
                 StepExecution snapshot = stepsByName.get(stepDef.getName());
                 if (snapshot == null) {
                     continue;
@@ -223,12 +239,14 @@ public class WorkflowScheduler {
         boolean allSuccess = !refreshed.isEmpty()
                 && refreshed.stream().allMatch(s -> s.getStatus() == StepExecutionStatus.SUCCESS);
 
-        if (allSuccess && execution.getStatus() == WorkflowExecutionStatus.RUNNING) {
+        workflowExecutionRepository.flush();
+        WorkflowExecution latest = workflowExecutionRepository.findById(executionId).orElseThrow();
+        if (allSuccess && latest.getStatus() == WorkflowExecutionStatus.RUNNING) {
             Instant finished = Instant.now();
-            execution.setStatus(WorkflowExecutionStatus.SUCCEEDED)
+            latest.setStatus(WorkflowExecutionStatus.SUCCEEDED)
                     .setUpdatedAt(finished)
                     .setFinishedAt(finished);
-            workflowExecutionRepository.save(execution);
+            workflowExecutionRepository.save(latest);
 
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(executionId)
@@ -238,7 +256,10 @@ public class WorkflowScheduler {
         }
     }
 
-    private void promoteRetryWaitSteps(Long executionId, Instant now) {
+    private void promoteRetryWaitSteps(Long executionId, WorkflowExecutionStatus execStatus, Instant now) {
+        if (execStatus == WorkflowExecutionStatus.PAUSED || execStatus == WorkflowExecutionStatus.CANCELLED) {
+            return;
+        }
         List<StepExecution> steps =
                 stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
         for (StepExecution s : steps) {
@@ -262,7 +283,9 @@ public class WorkflowScheduler {
     }
 
     private void failTimedOutRunningSteps(WorkflowExecution execution, Long executionId, Instant now) {
-        if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+        if (execution.getStatus() == WorkflowExecutionStatus.FAILED
+                || execution.getStatus() == WorkflowExecutionStatus.PAUSED
+                || execution.getStatus() == WorkflowExecutionStatus.CANCELLED) {
             return;
         }
         List<StepExecution> steps =

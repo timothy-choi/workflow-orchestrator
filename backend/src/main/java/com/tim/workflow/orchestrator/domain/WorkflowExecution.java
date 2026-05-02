@@ -38,6 +38,15 @@ public class WorkflowExecution {
     @Column(name = "finished_at")
     private Instant finishedAt;
 
+    @Column(name = "paused_at")
+    private Instant pausedAt;
+
+    @Column(name = "cancel_requested", nullable = false)
+    private boolean cancelRequested;
+
+    @Column(name = "cancelled_at")
+    private Instant cancelledAt;
+
     public Long getId() {
         return id;
     }
@@ -93,6 +102,33 @@ public class WorkflowExecution {
 
     public WorkflowExecution setFinishedAt(Instant finishedAt) {
         this.finishedAt = finishedAt;
+        return this;
+    }
+
+    public Instant getPausedAt() {
+        return pausedAt;
+    }
+
+    public WorkflowExecution setPausedAt(Instant pausedAt) {
+        this.pausedAt = pausedAt;
+        return this;
+    }
+
+    public boolean isCancelRequested() {
+        return cancelRequested;
+    }
+
+    public WorkflowExecution setCancelRequested(boolean cancelRequested) {
+        this.cancelRequested = cancelRequested;
+        return this;
+    }
+
+    public Instant getCancelledAt() {
+        return cancelledAt;
+    }
+
+    public WorkflowExecution setCancelledAt(Instant cancelledAt) {
+        this.cancelledAt = cancelledAt;
         return this;
     }
 }

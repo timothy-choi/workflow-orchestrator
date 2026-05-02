@@ -29,4 +29,19 @@ public class ExecutionController {
     public ExecutionResponse getExecution(@PathVariable Long executionId) {
         return executionService.getExecution(executionId);
     }
+
+    @PostMapping("/{executionId}/pause")
+    public ExecutionResponse pauseExecution(@PathVariable Long executionId) {
+        return executionService.pauseExecution(executionId);
+    }
+
+    @PostMapping("/{executionId}/resume")
+    public ExecutionResponse resumeExecution(@PathVariable Long executionId) {
+        return executionService.resumeExecution(executionId);
+    }
+
+    @PostMapping("/{executionId}/cancel")
+    public ExecutionResponse cancelExecution(@PathVariable Long executionId) {
+        return executionService.cancelExecution(executionId);
+    }
 }
