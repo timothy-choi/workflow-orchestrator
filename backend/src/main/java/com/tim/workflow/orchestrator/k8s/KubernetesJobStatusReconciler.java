@@ -64,7 +64,10 @@ public class KubernetesJobStatusReconciler {
     public void tick() {
         List<StepExecution> candidates = stepExecutionRepository.findRunningWithK8sJobForActiveExecutions(
                 StepExecutionStatus.RUNNING,
-                EnumSet.of(WorkflowExecutionStatus.CREATED, WorkflowExecutionStatus.RUNNING)
+                EnumSet.of(
+                        WorkflowExecutionStatus.CREATED,
+                        WorkflowExecutionStatus.RUNNING,
+                        WorkflowExecutionStatus.PAUSED)
         );
         for (StepExecution step : candidates) {
             try {

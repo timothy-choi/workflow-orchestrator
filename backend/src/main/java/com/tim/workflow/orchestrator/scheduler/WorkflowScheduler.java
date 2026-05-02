@@ -198,6 +198,9 @@ public class WorkflowScheduler {
             if (current.getStatus() == WorkflowExecutionStatus.CANCELLED || current.isCancelRequested()) {
                 break;
             }
+            if (current.getStatus() == WorkflowExecutionStatus.PAUSED) {
+                break;
+            }
             if (current.getStatus() == WorkflowExecutionStatus.FAILED) {
                 break;
             }
@@ -219,6 +222,9 @@ public class WorkflowScheduler {
                 workflowExecutionRepository.flush();
                 WorkflowExecution inner = workflowExecutionRepository.findById(executionId).orElseThrow();
                 if (inner.getStatus() == WorkflowExecutionStatus.CANCELLED || inner.isCancelRequested()) {
+                    break;
+                }
+                if (inner.getStatus() == WorkflowExecutionStatus.PAUSED) {
                     break;
                 }
 

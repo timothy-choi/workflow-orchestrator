@@ -135,10 +135,12 @@ public class StepRetryCoordinator {
 
             workflowMetrics.recordStepTerminal(step.getStepName(), "FAILED", step.getStartedAt(), now);
 
-            if (execution.getStatus() == WorkflowExecutionStatus.RUNNING) {
+            if (execution.getStatus() == WorkflowExecutionStatus.RUNNING
+                    || execution.getStatus() == WorkflowExecutionStatus.PAUSED) {
                 execution.setStatus(WorkflowExecutionStatus.FAILED)
                         .setFinishedAt(now)
-                        .setUpdatedAt(now);
+                        .setUpdatedAt(now)
+                        .setPausedAt(null);
                 workflowExecutionRepository.save(execution);
 
                 executionEventRepository.save(new ExecutionEvent()

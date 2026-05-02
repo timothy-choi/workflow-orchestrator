@@ -242,7 +242,8 @@ public class StepCallbackService {
     private void tryCompleteSucceededExecution(Long executionId, Instant now) {
         workflowExecutionRepository.flush();
         WorkflowExecution exec = workflowExecutionRepository.findById(executionId).orElseThrow();
-        if (exec.getStatus() != WorkflowExecutionStatus.RUNNING) {
+        if (exec.getStatus() != WorkflowExecutionStatus.RUNNING
+                && exec.getStatus() != WorkflowExecutionStatus.PAUSED) {
             return;
         }
 
@@ -254,7 +255,8 @@ public class StepCallbackService {
         if (allSuccess) {
             exec.setStatus(WorkflowExecutionStatus.SUCCEEDED)
                     .setFinishedAt(now)
-                    .setUpdatedAt(now);
+                    .setUpdatedAt(now)
+                    .setPausedAt(null);
             workflowExecutionRepository.save(exec);
 
             workflowMetrics.recordWorkflowTerminal(exec.getWorkflowId(), WorkflowExecutionStatus.SUCCEEDED, exec.getCreatedAt(), now);
