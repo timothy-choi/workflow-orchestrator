@@ -180,6 +180,7 @@ public class ExecutionService {
                 execution.getStatus(),
                 execution.getCreatedAt(),
                 execution.getUpdatedAt(),
+                execution.getFinishedAt(),
                 stepResponses,
                 eventResponses
         );

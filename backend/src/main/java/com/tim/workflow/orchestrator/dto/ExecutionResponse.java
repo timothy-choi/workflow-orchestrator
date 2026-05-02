@@ -13,6 +13,7 @@ public class ExecutionResponse {
     private final WorkflowExecutionStatus status;
     private final Instant createdAt;
     private final Instant updatedAt;
+    private final Instant finishedAt;
     private final List<StepExecutionResponse> steps;
     private final List<ExecutionEventResponse> events;
 
@@ -23,6 +24,7 @@ public class ExecutionResponse {
             WorkflowExecutionStatus status,
             Instant createdAt,
             Instant updatedAt,
+            Instant finishedAt,
             List<StepExecutionResponse> steps,
             List<ExecutionEventResponse> events
     ) {
@@ -32,6 +34,7 @@ public class ExecutionResponse {
         this.status = status;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
+        this.finishedAt = finishedAt;
         this.steps = steps;
         this.events = events;
     }
@@ -58,6 +61,10 @@ public class ExecutionResponse {
 
     public Instant getUpdatedAt() {
         return updatedAt;
+    }
+
+    public Instant getFinishedAt() {
+        return finishedAt;
     }
 
     public List<StepExecutionResponse> getSteps() {

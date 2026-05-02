@@ -14,3 +14,11 @@ spring:
 
 server:
   port: 8082
+
+# Local scheduler (see WorkflowScheduler, LocalStepRunner). Tests set workflow.scheduler.tick-enabled=false.
+workflow:
+  scheduler:
+    tick-enabled: true
+    fixed-delay-ms: 3000
+    initial-delay-ms: 1500
+    simulate-step-delay-ms: 50

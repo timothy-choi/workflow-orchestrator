@@ -35,6 +35,9 @@ public class WorkflowExecution {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 
+    @Column(name = "finished_at")
+    private Instant finishedAt;
+
     public Long getId() {
         return id;
     }
@@ -81,6 +84,15 @@ public class WorkflowExecution {
 
     public WorkflowExecution setUpdatedAt(Instant updatedAt) {
         this.updatedAt = updatedAt;
+        return this;
+    }
+
+    public Instant getFinishedAt() {
+        return finishedAt;
+    }
+
+    public WorkflowExecution setFinishedAt(Instant finishedAt) {
+        this.finishedAt = finishedAt;
         return this;
     }
 }
