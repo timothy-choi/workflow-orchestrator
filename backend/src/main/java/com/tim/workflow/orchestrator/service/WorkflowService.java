@@ -77,11 +77,11 @@ public class WorkflowService {
     public WorkflowDetailResponse getWorkflow(Long workflowId) {
         Workflow workflow = workflowRepository.findById(workflowId)
                 .orElseThrow(() -> new IllegalArgumentException("Workflow not found: " + workflowId));
-    
+
         WorkflowVersion version = workflowVersionRepository
                 .findByWorkflowIdAndVersionNumber(workflow.getId(), workflow.getCurrentVersion())
                 .orElseThrow(() -> new IllegalStateException("Workflow version not found"));
-    
+
         return new WorkflowDetailResponse(
                 workflow.getId(),
                 workflow.getName(),
