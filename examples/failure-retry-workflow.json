@@ -1,0 +1,14 @@
+{
+  "name": "failure-retry-demo",
+  "description": "Step fails by exiting non-zero; orchestrator retries up to maxRetries (Kubernetes worker reports FAILED to callback). Local mode succeeds immediately unless you change the runner.",
+  "steps": [
+    {
+      "name": "flaky",
+      "image": "busybox:latest",
+      "command": "echo failing-on-purpose && exit 1",
+      "dependencies": [],
+      "timeoutSeconds": 120,
+      "maxRetries": 3
+    }
+  ]
+}

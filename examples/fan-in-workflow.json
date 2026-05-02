@@ -1,0 +1,24 @@
+{
+  "name": "fan-in-demo",
+  "description": "A and B run in parallel; C waits for both (merge / fan-in).",
+  "steps": [
+    {
+      "name": "A",
+      "image": "busybox:latest",
+      "command": "echo branch-A",
+      "dependencies": []
+    },
+    {
+      "name": "B",
+      "image": "busybox:latest",
+      "command": "echo branch-B",
+      "dependencies": []
+    },
+    {
+      "name": "merge",
+      "image": "busybox:latest",
+      "command": "echo merged-after-A-and-B",
+      "dependencies": ["A", "B"]
+    }
+  ]
+}

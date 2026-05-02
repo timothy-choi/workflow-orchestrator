@@ -26,6 +26,8 @@ workflow:
     reconcile-delay-ms: 10000
 
 orchestrator:
+  cors:
+    allowed-origins: http://localhost:5173,http://127.0.0.1:5173
   execution:
     mode: local
   callback:

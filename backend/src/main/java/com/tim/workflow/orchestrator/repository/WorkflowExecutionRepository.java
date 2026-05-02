@@ -4,6 +4,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -19,6 +20,8 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
     List<WorkflowExecution> findByStatusIn(Collection<WorkflowExecutionStatus> statuses);
 
     long countByStatusIn(Collection<WorkflowExecutionStatus> statuses);
+
+    List<WorkflowExecution> findAllByOrderByCreatedAtDesc(Pageable pageable);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT e FROM WorkflowExecution e WHERE e.id = :id")

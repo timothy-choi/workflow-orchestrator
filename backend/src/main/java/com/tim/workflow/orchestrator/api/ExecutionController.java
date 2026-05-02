@@ -11,6 +11,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.tim.workflow.orchestrator.dto.ExecutionEventResponse;
 import com.tim.workflow.orchestrator.dto.ExecutionResponse;
+import com.tim.workflow.orchestrator.dto.ExecutionSummaryResponse;
 import com.tim.workflow.orchestrator.service.ExecutionService;
 
 @RestController
@@ -26,6 +27,11 @@ public class ExecutionController {
     @PostMapping
     public ExecutionResponse createExecution(@RequestParam("workflowId") Long workflowId) {
         return executionService.createExecution(workflowId);
+    }
+
+    @GetMapping
+    public List<ExecutionSummaryResponse> listExecutions(@RequestParam(defaultValue = "50") int limit) {
+        return executionService.listRecentExecutions(limit);
     }
 
     @GetMapping("/{executionId}")
