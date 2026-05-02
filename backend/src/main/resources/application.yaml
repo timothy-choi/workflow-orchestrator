@@ -22,3 +22,12 @@ workflow:
     fixed-delay-ms: 3000
     initial-delay-ms: 1500
     simulate-step-delay-ms: 50
+
+orchestrator:
+  execution:
+    mode: local
+  callback:
+    base-url: http://localhost:8082
+    token: dev-token-change-me
+  kubernetes:
+    namespace: default

@@ -8,6 +8,7 @@ import java.util.Map;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -16,6 +17,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tim.workflow.orchestrator.config.ExecutionMode;
+import com.tim.workflow.orchestrator.config.OrchestratorProperties;
 import com.tim.workflow.orchestrator.domain.ExecutionEvent;
 import com.tim.workflow.orchestrator.domain.ExecutionEventType;
 import com.tim.workflow.orchestrator.domain.StepExecution;
@@ -25,10 +28,13 @@ import com.tim.workflow.orchestrator.domain.WorkflowExecutionStatus;
 import com.tim.workflow.orchestrator.domain.WorkflowVersion;
 import com.tim.workflow.orchestrator.dto.CreateWorkflowRequest;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
+import com.tim.workflow.orchestrator.k8s.KubernetesJobDispatcher;
 import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowVersionRepository;
+
+import io.kubernetes.client.openapi.ApiException;
 
 @Component
 public class WorkflowScheduler {
@@ -41,6 +47,8 @@ public class WorkflowScheduler {
     private final ExecutionEventRepository executionEventRepository;
     private final DependencyResolver dependencyResolver;
     private final LocalStepRunner localStepRunner;
+    private final OrchestratorProperties orchestratorProperties;
+    private final ObjectProvider<KubernetesJobDispatcher> kubernetesJobDispatcher;
     private final ObjectMapper objectMapper;
     private final WorkflowScheduler self;
 
@@ -53,6 +61,8 @@ public class WorkflowScheduler {
             ExecutionEventRepository executionEventRepository,
             DependencyResolver dependencyResolver,
             LocalStepRunner localStepRunner,
+            OrchestratorProperties orchestratorProperties,
+            ObjectProvider<KubernetesJobDispatcher> kubernetesJobDispatcher,
             ObjectMapper objectMapper,
             @Lazy WorkflowScheduler self,
             @Value("${workflow.scheduler.tick-enabled:true}") boolean tickEnabled
@@ -63,6 +73,8 @@ public class WorkflowScheduler {
         this.executionEventRepository = executionEventRepository;
         this.dependencyResolver = dependencyResolver;
         this.localStepRunner = localStepRunner;
+        this.orchestratorProperties = orchestratorProperties;
+        this.kubernetesJobDispatcher = kubernetesJobDispatcher;
         this.objectMapper = objectMapper;
         this.self = self;
         this.tickEnabled = tickEnabled;
@@ -150,17 +162,30 @@ public class WorkflowScheduler {
                         .setPayload(stepPayload(pending.getStepName()))
                         .setCreatedAt(runStart));
 
-                localStepRunner.simulateSuccess(pending);
+                if (orchestratorProperties.getExecution().getMode() == ExecutionMode.LOCAL) {
+                    localStepRunner.simulateSuccess(pending);
 
-                Instant runEnd = Instant.now();
-                pending.setStatus(StepExecutionStatus.SUCCESS).setUpdatedAt(runEnd);
-                stepExecutionRepository.save(pending);
+                    Instant runEnd = Instant.now();
+                    pending.setStatus(StepExecutionStatus.SUCCESS).setUpdatedAt(runEnd);
+                    stepExecutionRepository.save(pending);
 
-                executionEventRepository.save(new ExecutionEvent()
-                        .setWorkflowExecutionId(executionId)
-                        .setEventType(ExecutionEventType.STEP_SUCCEEDED)
-                        .setPayload(stepPayload(pending.getStepName()))
-                        .setCreatedAt(runEnd));
+                    executionEventRepository.save(new ExecutionEvent()
+                            .setWorkflowExecutionId(executionId)
+                            .setEventType(ExecutionEventType.STEP_SUCCEEDED)
+                            .setPayload(stepPayload(pending.getStepName()))
+                            .setCreatedAt(runEnd));
+                } else {
+                    KubernetesJobDispatcher dispatcher = kubernetesJobDispatcher.getIfAvailable();
+                    if (dispatcher == null) {
+                        throw new IllegalStateException(
+                                "KubernetesJobDispatcher bean missing while orchestrator.execution.mode=kubernetes");
+                    }
+                    try {
+                        dispatcher.dispatchJob(executionId, pending, stepDef);
+                    } catch (ApiException e) {
+                        throw new IllegalStateException("Failed to create Kubernetes Job: " + e.getMessage(), e);
+                    }
+                }
             }
 
             if (!progressed) {
