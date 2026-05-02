@@ -56,6 +56,9 @@ class WorkflowSchedulerLocalExecutionTest {
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
                 .hasSize(1);
         assertThat(r.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
+                .hasSize(1);
+        assertThat(r.getEvents())
                 .noneMatch(e -> e.getEventType() == ExecutionEventType.STEP_SUCCEEDED);
     }
 
@@ -100,6 +103,9 @@ class WorkflowSchedulerLocalExecutionTest {
         assertThat(r.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
                 .hasSize(1);
+        assertThat(r.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
+                .hasSize(1);
     }
 
     @Test
@@ -123,6 +129,9 @@ class WorkflowSchedulerLocalExecutionTest {
                 .hasSize(2);
         assertThat(r.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
+                .hasSize(1);
+        assertThat(r.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
                 .hasSize(1);
     }
 

@@ -162,6 +162,12 @@ class ExecutionControlIntegrationTest {
         ExecutionResponse failed = executionService.getExecution(executionId);
         assertThat(failed.getStatus()).isEqualTo(WorkflowExecutionStatus.FAILED);
         assertThat(failed.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.FAILED);
+        assertThat(failed.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
+                .hasSize(1);
+        assertThat(failed.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
+                .hasSize(1);
 
         mockMvc.perform(post("/step-executions/" + se.getId() + "/retry"))
                 .andExpect(status().isOk());
@@ -170,6 +176,9 @@ class ExecutionControlIntegrationTest {
         assertThat(retried.getStatus()).isEqualTo(WorkflowExecutionStatus.RUNNING);
         assertThat(retried.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.PENDING);
         assertThat(retried.getSteps().get(0).getAttempt()).isGreaterThan(failed.getSteps().get(0).getAttempt());
+        assertThat(retried.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
+                .hasSize(1);
         assertThat(retried.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_MANUAL_RETRY_REQUESTED)
                 .hasSize(1);

@@ -124,6 +124,15 @@ class ExecutionReliabilityIntegrationTest {
         assertThat(r.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
                 .hasSize(1);
+        assertThat(r.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
+                .hasSize(1);
+        assertThat(r.getEvents().stream()
+                .filter(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
+                .findFirst()
+                .orElseThrow()
+                .getPayload())
+                .contains("\"stepName\":\"only\"", "\"failureReason\":\"fatal\"");
     }
 
     @Test
@@ -178,6 +187,9 @@ class ExecutionReliabilityIntegrationTest {
                 .hasSize(1);
         assertThat(r.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
+                .hasSize(1);
+        assertThat(r.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
                 .hasSize(1);
     }
 

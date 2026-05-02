@@ -141,6 +141,12 @@ public class StepRetryCoordinator {
                         .setUpdatedAt(now);
                 workflowExecutionRepository.save(execution);
 
+                executionEventRepository.save(new ExecutionEvent()
+                        .setWorkflowExecutionId(execution.getId())
+                        .setEventType(ExecutionEventType.EXECUTION_FAILED)
+                        .setPayload(executionFailedPayload(step.getStepName(), failureReason))
+                        .setCreatedAt(now));
+
                 WorkflowExecution reloaded = workflowExecutionRepository.findById(execution.getId()).orElse(execution);
                 workflowMetrics.recordWorkflowTerminal(
                         reloaded.getWorkflowId(),
@@ -167,6 +173,19 @@ public class StepRetryCoordinator {
         Map<String, Object> map = new LinkedHashMap<>();
         map.put("stepName", stepName);
         map.put("reason", reason);
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private String executionFailedPayload(String stepName, String failureReason) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("stepName", stepName);
+        if (failureReason != null && !failureReason.isBlank()) {
+            map.put("failureReason", failureReason);
+        }
         try {
             return objectMapper.writeValueAsString(map);
         } catch (JsonProcessingException e) {
