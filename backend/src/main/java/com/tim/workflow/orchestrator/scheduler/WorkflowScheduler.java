@@ -238,20 +238,43 @@ public class WorkflowScheduler {
                 }
 
                 if (orchestratorProperties.getExecution().getMode() == ExecutionMode.LOCAL) {
-                    localStepRunner.simulateSuccess(running);
-
+                    LocalStepRunResult runResult =
+                            localStepRunner.run(stepDef.getCommand(), running.getTimeoutSeconds(), running);
                     Instant runEnd = Instant.now();
-                    running.setStatus(StepExecutionStatus.SUCCESS)
-                            .setFinishedAt(runEnd)
-                            .setUpdatedAt(runEnd);
-                    stepExecutionRepository.save(running);
+                    WorkflowExecution execState = workflowExecutionRepository.findById(executionId).orElseThrow();
+                    StepExecution runningFresh = stepExecutionRepository.findById(running.getId()).orElseThrow();
 
-                    executionEventRepository.save(new ExecutionEvent()
-                            .setWorkflowExecutionId(executionId)
-                            .setEventType(ExecutionEventType.STEP_SUCCEEDED)
-                            .setPayload(stepPayload(running.getStepName()))
-                            .setCreatedAt(runEnd));
-                    workflowMetrics.recordStepTerminal(running.getStepName(), "SUCCESS", runStart, runEnd);
+                    if (runResult.isSuccess()) {
+                        runningFresh.setStatus(StepExecutionStatus.SUCCESS)
+                                .setFinishedAt(runEnd)
+                                .setUpdatedAt(runEnd);
+                        stepExecutionRepository.save(runningFresh);
+
+                        executionEventRepository.save(new ExecutionEvent()
+                                .setWorkflowExecutionId(executionId)
+                                .setEventType(ExecutionEventType.STEP_SUCCEEDED)
+                                .setPayload(stepPayload(runningFresh.getStepName()))
+                                .setCreatedAt(runEnd));
+                        workflowMetrics.recordStepTerminal(runningFresh.getStepName(), "SUCCESS", runStart, runEnd);
+                    } else if (runResult.isTimedOut()) {
+                        stepRetryCoordinator.handleFailureWithDiagnostic(
+                                execState,
+                                runningFresh,
+                                runResult.getFailureReason(),
+                                ExecutionEventType.STEP_TIMED_OUT,
+                                runEnd
+                        );
+                    } else {
+                        String reason = runResult.getFailureReason() != null
+                                ? runResult.getFailureReason()
+                                : "Local step failed";
+                        stepRetryCoordinator.handleFailureFromCallback(
+                                execState,
+                                runningFresh,
+                                reason,
+                                runEnd
+                        );
+                    }
                 } else {
                     KubernetesJobDispatcher dispatcher = kubernetesJobDispatcher.getIfAvailable();
                     if (dispatcher == null) {
