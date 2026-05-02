@@ -21,8 +21,7 @@ import com.tim.workflow.orchestrator.service.WorkflowService;
 @SpringBootTest
 @TestPropertySource(
         properties = {
-                "workflow.scheduler.retry-backoff-base-seconds=0",
-                "workflow.scheduler.simulate-step-delay-ms=0"
+                "workflow.scheduler.retry-backoff-base-seconds=0"
         }
 )
 class WorkflowSchedulerLocalExecutionTest {
@@ -56,6 +55,28 @@ class WorkflowSchedulerLocalExecutionTest {
         assertThat(r.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_FAILED)
                 .hasSize(1);
+        assertThat(r.getEvents())
+                .noneMatch(e -> e.getEventType() == ExecutionEventType.STEP_SUCCEEDED);
+    }
+
+    @Test
+    void echoHello_succeedsWithStepSucceededEvent() {
+        WorkflowStepRequest s = step("hello-step", List.of());
+        s.setCommand("echo hello");
+
+        Long workflowId = createWorkflow(s);
+        Long executionId = executionService.createExecution(workflowId).getId();
+
+        workflowScheduler.processExecution(executionId);
+
+        ExecutionResponse r = executionService.getExecution(executionId);
+        assertThat(r.getStatus()).isEqualTo(WorkflowExecutionStatus.SUCCEEDED);
+        assertThat(r.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.SUCCESS);
+        assertThat(r.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_SUCCEEDED)
+                .hasSize(1);
+        assertThat(r.getEvents())
+                .noneMatch(e -> e.getEventType() == ExecutionEventType.STEP_FAILED);
     }
 
     @Test

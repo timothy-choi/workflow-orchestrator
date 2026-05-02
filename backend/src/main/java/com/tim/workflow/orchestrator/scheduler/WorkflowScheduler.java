@@ -265,10 +265,13 @@ public class WorkflowScheduler {
                                 runEnd
                         );
                     } else {
+                        String reason = runResult.getFailureReason() != null
+                                ? runResult.getFailureReason()
+                                : "Local step failed";
                         stepRetryCoordinator.handleFailureFromCallback(
                                 execState,
                                 runningFresh,
-                                runResult.getFailureReason(),
+                                reason,
                                 runEnd
                         );
                     }

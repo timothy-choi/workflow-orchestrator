@@ -2,18 +2,18 @@ package com.tim.workflow.orchestrator.scheduler;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import com.tim.workflow.orchestrator.domain.StepExecution;
 
 /**
- * Runs workflow step {@code command} locally via {@code /bin/sh -c}.
+ * Runs workflow step {@code command} locally via {@code /bin/sh -c "&lt;command&gt;"} (no simulated success).
  */
 @Component
 public class LocalStepRunner {
@@ -22,50 +22,30 @@ public class LocalStepRunner {
 
     private static final int OUTPUT_CAP = 8000;
 
-    private final int simulateStepDelayMs;
-
-    public LocalStepRunner(
-            @Value("${workflow.scheduler.simulate-step-delay-ms:50}") int simulateStepDelayMs
-    ) {
-        this.simulateStepDelayMs = simulateStepDelayMs;
-    }
-
-    /**
-     * Executes {@code command} with {@code timeoutSeconds} wall-clock budget (minimum 1 second when {@code timeoutSeconds &lt; 1}).
-     */
     public LocalStepRunResult run(String command, int timeoutSeconds, StepExecution step) {
-        if (simulateStepDelayMs > 0) {
-            try {
-                Thread.sleep(simulateStepDelayMs);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return LocalStepRunResult.failed("Interrupted before running step command");
-            }
+        if (command == null || command.isBlank()) {
+            return LocalStepRunResult.failedPreStart("Step command is empty");
         }
 
         long waitSeconds = timeoutSeconds < 1 ? 1L : timeoutSeconds;
 
         ProcessBuilder pb = new ProcessBuilder("/bin/sh", "-c", command);
-        pb.redirectErrorStream(true);
 
         Process process;
         try {
             process = pb.start();
         } catch (IOException e) {
             log.warn("Could not start shell for step {}: {}", step.getStepName(), e.getMessage());
-            return LocalStepRunResult.failed("Failed to start command: " + e.getMessage());
+            return LocalStepRunResult.failedPreStart("Failed to start command: " + e.getMessage());
         }
 
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        Thread drainer = new Thread(() -> {
-            try {
-                process.getInputStream().transferTo(captured);
-            } catch (IOException ignored) {
-                // Process may have been destroyed
-            }
-        }, "local-step-drain-" + step.getId());
-        drainer.setDaemon(true);
-        drainer.start();
+        ByteArrayOutputStream outBuf = new ByteArrayOutputStream();
+        ByteArrayOutputStream errBuf = new ByteArrayOutputStream();
+
+        Thread drainOut = drainThread("local-step-out-" + safeId(step), process.getInputStream(), outBuf);
+        Thread drainErr = drainThread("local-step-err-" + safeId(step), process.getErrorStream(), errBuf);
+        drainOut.start();
+        drainErr.start();
 
         boolean finished;
         try {
@@ -73,32 +53,64 @@ public class LocalStepRunner {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
-            joinQuietly(drainer);
-            return LocalStepRunResult.failed("Interrupted while waiting for step command");
+            joinQuietly(drainOut);
+            joinQuietly(drainErr);
+            return LocalStepRunResult.failedPreStart("Interrupted while waiting for step command");
         }
 
         if (!finished) {
             process.destroyForcibly();
-            joinQuietly(drainer);
+            joinQuietly(drainOut);
+            joinQuietly(drainErr);
             log.warn("Local step timed out stepName={} executionId={} timeoutSeconds={}",
                     step.getStepName(), step.getWorkflowExecutionId(), timeoutSeconds);
-            return LocalStepRunResult.timedOut();
+            String outSnap = truncate(bytesToString(outBuf));
+            String errSnap = truncate(bytesToString(errBuf));
+            return LocalStepRunResult.timedOut(outSnap, errSnap);
         }
 
-        joinQuietly(drainer);
+        joinQuietly(drainOut);
+        joinQuietly(drainErr);
 
-        int exit = process.exitValue();
-        String output = truncateOutput(captured.toString(StandardCharsets.UTF_8));
+        int exit;
+        try {
+            exit = process.exitValue();
+        } catch (IllegalThreadStateException e) {
+            return LocalStepRunResult.failedPreStart("Process exit code not available");
+        }
+
+        String out = truncate(bytesToString(outBuf));
+        String err = truncate(bytesToString(errBuf));
 
         if (exit != 0) {
-            String reason = buildFailureReason(exit, output);
-            log.debug("Local step failed stepName={} exit={} outputSnippet={}",
-                    step.getStepName(), exit, abbreviateForLog(output));
-            return LocalStepRunResult.failed(reason);
+            String reason = buildFailureReason(exit, out, err);
+            log.debug("Local step failed stepName={} exit={}", step.getStepName(), exit);
+            return LocalStepRunResult.failedExit(exit, out, err, reason);
         }
 
         log.debug("Local step succeeded stepName={} executionId={}", step.getStepName(), step.getWorkflowExecutionId());
-        return LocalStepRunResult.ok();
+        return LocalStepRunResult.succeeded(out, err);
+    }
+
+    private static String safeId(StepExecution step) {
+        Long id = step.getId();
+        return id != null ? String.valueOf(id) : "na";
+    }
+
+    private static Thread drainThread(String name, InputStream in, ByteArrayOutputStream target) {
+        Thread t = new Thread(() -> {
+            try {
+                in.transferTo(target);
+            } catch (IOException ignored) {
+                // Stream closed after destroy or normal exit
+            }
+        }, name);
+        t.setDaemon(true);
+        return t;
+    }
+
+    private static String bytesToString(ByteArrayOutputStream buf) {
+        return buf.toString(StandardCharsets.UTF_8);
     }
 
     private static void joinQuietly(Thread t) {
@@ -109,7 +121,7 @@ public class LocalStepRunner {
         }
     }
 
-    private static String truncateOutput(String raw) {
+    private static String truncate(String raw) {
         if (raw == null) {
             return "";
         }
@@ -120,17 +132,14 @@ public class LocalStepRunner {
         return t.substring(0, OUTPUT_CAP) + "…(truncated)";
     }
 
-    private static String buildFailureReason(int exitCode, String output) {
-        if (output.isEmpty()) {
-            return "Command exited with code " + exitCode;
+    private static String buildFailureReason(int exitCode, String stdout, String stderr) {
+        StringBuilder sb = new StringBuilder("Command exited with code ").append(exitCode);
+        if (!stdout.isEmpty()) {
+            sb.append("; stdout: ").append(stdout);
         }
-        return "Command exited with code " + exitCode + ": " + output;
-    }
-
-    private static String abbreviateForLog(String output) {
-        if (output.length() <= 200) {
-            return output;
+        if (!stderr.isEmpty()) {
+            sb.append("; stderr: ").append(stderr);
         }
-        return output.substring(0, 200) + "…";
+        return sb.toString();
     }
 }
