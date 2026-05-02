@@ -1,0 +1,10 @@
+ALTER TABLE step_executions
+    ADD COLUMN attempt INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN max_retries INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0,
+    ADD COLUMN next_retry_at TIMESTAMP,
+    ADD COLUMN failure_reason TEXT,
+    ADD COLUMN k8s_job_name VARCHAR(255),
+    ADD COLUMN timeout_seconds INTEGER NOT NULL DEFAULT 300,
+    ADD COLUMN started_at TIMESTAMP,
+    ADD COLUMN finished_at TIMESTAMP;

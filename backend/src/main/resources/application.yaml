@@ -22,6 +22,8 @@ workflow:
     fixed-delay-ms: 3000
     initial-delay-ms: 1500
     simulate-step-delay-ms: 50
+    retry-backoff-base-seconds: 10
+    reconcile-delay-ms: 10000
 
 orchestrator:
   execution:

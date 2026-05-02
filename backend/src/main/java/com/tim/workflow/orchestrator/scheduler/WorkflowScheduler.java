@@ -33,6 +33,7 @@ import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
 import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowExecutionRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowVersionRepository;
+import com.tim.workflow.orchestrator.service.StepRetryCoordinator;
 
 import io.kubernetes.client.openapi.ApiException;
 
@@ -49,6 +50,7 @@ public class WorkflowScheduler {
     private final LocalStepRunner localStepRunner;
     private final OrchestratorProperties orchestratorProperties;
     private final ObjectProvider<KubernetesJobDispatcher> kubernetesJobDispatcher;
+    private final StepRetryCoordinator stepRetryCoordinator;
     private final ObjectMapper objectMapper;
     private final WorkflowScheduler self;
 
@@ -63,6 +65,7 @@ public class WorkflowScheduler {
             LocalStepRunner localStepRunner,
             OrchestratorProperties orchestratorProperties,
             ObjectProvider<KubernetesJobDispatcher> kubernetesJobDispatcher,
+            StepRetryCoordinator stepRetryCoordinator,
             ObjectMapper objectMapper,
             @Lazy WorkflowScheduler self,
             @Value("${workflow.scheduler.tick-enabled:true}") boolean tickEnabled
@@ -75,6 +78,7 @@ public class WorkflowScheduler {
         this.localStepRunner = localStepRunner;
         this.orchestratorProperties = orchestratorProperties;
         this.kubernetesJobDispatcher = kubernetesJobDispatcher;
+        this.stepRetryCoordinator = stepRetryCoordinator;
         this.objectMapper = objectMapper;
         this.self = self;
         this.tickEnabled = tickEnabled;
@@ -127,7 +131,18 @@ public class WorkflowScheduler {
 
         CreateWorkflowRequest definition = parseDefinition(version.getDefinitionJson());
 
+        promoteRetryWaitSteps(executionId, now);
+        failTimedOutRunningSteps(execution, executionId, now);
+
+        if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+            return;
+        }
+
         while (true) {
+            if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+                break;
+            }
+
             List<StepExecution> stepRows =
                     stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
             Map<String, StepExecution> stepsByName = new LinkedHashMap<>();
@@ -146,33 +161,43 @@ public class WorkflowScheduler {
                 if (snapshot == null) {
                     continue;
                 }
-                StepExecution pending = stepExecutionRepository.findById(snapshot.getId()).orElseThrow();
-                if (pending.getStatus() != StepExecutionStatus.PENDING) {
+                if (snapshot.getStatus() != StepExecutionStatus.PENDING) {
+                    continue;
+                }
+
+                int claimed = stepExecutionRepository.claimPendingToRunning(
+                        snapshot.getId(),
+                        Instant.now(),
+                        StepExecutionStatus.PENDING,
+                        StepExecutionStatus.RUNNING
+                );
+                if (claimed == 0) {
                     continue;
                 }
 
                 progressed = true;
-                Instant runStart = Instant.now();
-                pending.setStatus(StepExecutionStatus.RUNNING).setUpdatedAt(runStart);
-                stepExecutionRepository.save(pending);
+                StepExecution running = stepExecutionRepository.findById(snapshot.getId()).orElseThrow();
+                Instant runStart = running.getStartedAt() != null ? running.getStartedAt() : Instant.now();
 
                 executionEventRepository.save(new ExecutionEvent()
                         .setWorkflowExecutionId(executionId)
                         .setEventType(ExecutionEventType.STEP_STARTED)
-                        .setPayload(stepPayload(pending.getStepName()))
+                        .setPayload(stepPayload(running.getStepName()))
                         .setCreatedAt(runStart));
 
                 if (orchestratorProperties.getExecution().getMode() == ExecutionMode.LOCAL) {
-                    localStepRunner.simulateSuccess(pending);
+                    localStepRunner.simulateSuccess(running);
 
                     Instant runEnd = Instant.now();
-                    pending.setStatus(StepExecutionStatus.SUCCESS).setUpdatedAt(runEnd);
-                    stepExecutionRepository.save(pending);
+                    running.setStatus(StepExecutionStatus.SUCCESS)
+                            .setFinishedAt(runEnd)
+                            .setUpdatedAt(runEnd);
+                    stepExecutionRepository.save(running);
 
                     executionEventRepository.save(new ExecutionEvent()
                             .setWorkflowExecutionId(executionId)
                             .setEventType(ExecutionEventType.STEP_SUCCEEDED)
-                            .setPayload(stepPayload(pending.getStepName()))
+                            .setPayload(stepPayload(running.getStepName()))
                             .setCreatedAt(runEnd));
                 } else {
                     KubernetesJobDispatcher dispatcher = kubernetesJobDispatcher.getIfAvailable();
@@ -181,7 +206,7 @@ public class WorkflowScheduler {
                                 "KubernetesJobDispatcher bean missing while orchestrator.execution.mode=kubernetes");
                     }
                     try {
-                        dispatcher.dispatchJob(executionId, pending, stepDef);
+                        dispatcher.dispatchJob(executionId, running, stepDef);
                     } catch (ApiException e) {
                         throw new IllegalStateException("Failed to create Kubernetes Job: " + e.getMessage(), e);
                     }
@@ -210,6 +235,56 @@ public class WorkflowScheduler {
                     .setEventType(ExecutionEventType.EXECUTION_SUCCEEDED)
                     .setPayload("{}")
                     .setCreatedAt(finished));
+        }
+    }
+
+    private void promoteRetryWaitSteps(Long executionId, Instant now) {
+        List<StepExecution> steps =
+                stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
+        for (StepExecution s : steps) {
+            if (s.getStatus() != StepExecutionStatus.RETRY_WAIT || s.getNextRetryAt() == null) {
+                continue;
+            }
+            if (s.getNextRetryAt().isAfter(now)) {
+                continue;
+            }
+            s.setStatus(StepExecutionStatus.PENDING)
+                    .setNextRetryAt(null)
+                    .setUpdatedAt(now);
+            stepExecutionRepository.save(s);
+
+            executionEventRepository.save(new ExecutionEvent()
+                    .setWorkflowExecutionId(executionId)
+                    .setEventType(ExecutionEventType.STEP_RETRY_READY)
+                    .setPayload(stepPayload(s.getStepName()))
+                    .setCreatedAt(now));
+        }
+    }
+
+    private void failTimedOutRunningSteps(WorkflowExecution execution, Long executionId, Instant now) {
+        if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+            return;
+        }
+        List<StepExecution> steps =
+                stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
+        for (StepExecution s : steps) {
+            if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+                break;
+            }
+            if (s.getStatus() != StepExecutionStatus.RUNNING || s.getStartedAt() == null) {
+                continue;
+            }
+            Instant deadline = s.getStartedAt().plusSeconds(s.getTimeoutSeconds());
+            if (!deadline.isBefore(now)) {
+                continue;
+            }
+            stepRetryCoordinator.handleFailureWithDiagnostic(
+                    execution,
+                    s,
+                    "Step timed out after " + s.getTimeoutSeconds() + "s",
+                    ExecutionEventType.STEP_TIMED_OUT,
+                    now
+            );
         }
     }
 

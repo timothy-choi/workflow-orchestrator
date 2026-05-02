@@ -75,6 +75,30 @@ class StepCallbackCompletionIntegrationTest {
     }
 
     @Test
+    void callbackSuccess_duplicatePost_isIdempotentForStepSucceeded() throws Exception {
+        Long workflowId = createWorkflow(step("only", List.of()));
+        Long executionId = executionService.createExecution(workflowId).getId();
+
+        long stepId = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId).get(0).getId();
+        stepExecutionRepository.findById(stepId).ifPresent(s -> {
+            s.setStatus(StepExecutionStatus.RUNNING);
+            stepExecutionRepository.save(s);
+        });
+
+        postSuccess(executionId, stepId);
+        postSuccess(executionId, stepId);
+
+        ExecutionResponse result = executionService.getExecution(executionId);
+        assertThat(result.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.SUCCESS);
+        assertThat(result.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.STEP_SUCCEEDED)
+                .hasSize(1);
+        assertThat(result.getEvents())
+                .filteredOn(e -> e.getEventType() == ExecutionEventType.CALLBACK_RECEIVED)
+                .hasSize(1);
+    }
+
+    @Test
     void callbackWithWrongToken_returnsUnauthorized() throws Exception {
         Long workflowId = createWorkflow(step("only", List.of()));
         Long executionId = executionService.createExecution(workflowId).getId();

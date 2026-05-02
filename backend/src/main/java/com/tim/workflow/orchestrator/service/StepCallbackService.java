@@ -33,6 +33,7 @@ public class StepCallbackService {
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final StepExecutionRepository stepExecutionRepository;
     private final ExecutionEventRepository executionEventRepository;
+    private final StepRetryCoordinator stepRetryCoordinator;
     private final ObjectMapper objectMapper;
 
     public StepCallbackService(
@@ -40,12 +41,14 @@ public class StepCallbackService {
             WorkflowExecutionRepository workflowExecutionRepository,
             StepExecutionRepository stepExecutionRepository,
             ExecutionEventRepository executionEventRepository,
+            StepRetryCoordinator stepRetryCoordinator,
             ObjectMapper objectMapper
     ) {
         this.orchestratorProperties = orchestratorProperties;
         this.workflowExecutionRepository = workflowExecutionRepository;
         this.stepExecutionRepository = stepExecutionRepository;
         this.executionEventRepository = executionEventRepository;
+        this.stepRetryCoordinator = stepRetryCoordinator;
         this.objectMapper = objectMapper;
     }
 
@@ -73,34 +76,96 @@ public class StepCallbackService {
             workflowExecutionRepository.save(execution);
         }
 
+        if (body.getStatus() == StepResultStatus.SUCCESS) {
+            if (step.getStatus() == StepExecutionStatus.SUCCESS) {
+                return;
+            }
+            if (step.getStatus() != StepExecutionStatus.RUNNING) {
+                return;
+            }
+            executionEventRepository.save(new ExecutionEvent()
+                    .setWorkflowExecutionId(execution.getId())
+                    .setEventType(ExecutionEventType.CALLBACK_RECEIVED)
+                    .setPayload(callbackReceivedPayload(step.getStepName(), body))
+                    .setCreatedAt(now));
+            completeStepSuccess(execution, step, body, now);
+            return;
+        }
+
+        // FAILED callback
+        if (step.getStatus() != StepExecutionStatus.RUNNING) {
+            return;
+        }
+        stepRetryCoordinator.handleFailureFromCallback(execution, step, body.getMessage(), now);
+    }
+
+    /**
+     * Reconciler path when Kubernetes reports Job success but HTTP callback never arrived.
+     */
+    /**
+     * Best-effort completion when the Job succeeded in Kubernetes but no HTTP callback arrived.
+     * Uses a regular load (no execution pessimistic lock) so callers such as the reconciler can hold locks safely.
+     */
+    @Transactional
+    public void applyReconcilerJobSucceeded(Long executionId, Long stepExecutionId, String message, Instant now) {
+        StepExecution step = stepExecutionRepository.findById(stepExecutionId)
+                .orElseThrow(() -> new IllegalStateException("Step not found: " + stepExecutionId));
+        if (!step.getWorkflowExecutionId().equals(executionId)) {
+            throw new IllegalStateException("Step does not belong to execution");
+        }
+        if (step.getStatus() == StepExecutionStatus.SUCCESS) {
+            return;
+        }
         if (step.getStatus() != StepExecutionStatus.RUNNING) {
             return;
         }
 
-        if (body.getStatus() == StepResultStatus.SUCCESS) {
-            step.setStatus(StepExecutionStatus.SUCCESS).setUpdatedAt(now);
-            stepExecutionRepository.save(step);
-            executionEventRepository.save(new ExecutionEvent()
-                    .setWorkflowExecutionId(execution.getId())
-                    .setEventType(ExecutionEventType.STEP_SUCCEEDED)
-                    .setPayload(stepOutcomePayload(step.getStepName(), body))
-                    .setCreatedAt(now));
-        } else {
-            step.setStatus(StepExecutionStatus.FAILED).setUpdatedAt(now);
-            stepExecutionRepository.save(step);
-            executionEventRepository.save(new ExecutionEvent()
-                    .setWorkflowExecutionId(execution.getId())
-                    .setEventType(ExecutionEventType.STEP_FAILED)
-                    .setPayload(stepOutcomePayload(step.getStepName(), body))
-                    .setCreatedAt(now));
+        WorkflowExecution execution = workflowExecutionRepository.findById(executionId)
+                .orElseThrow(() -> new IllegalStateException("Execution not found: " + executionId));
 
-            if (execution.getStatus() == WorkflowExecutionStatus.RUNNING) {
-                execution.setStatus(WorkflowExecutionStatus.FAILED).setUpdatedAt(now);
-                workflowExecutionRepository.save(execution);
-            }
-        }
+        executionEventRepository.save(new ExecutionEvent()
+                .setWorkflowExecutionId(executionId)
+                .setEventType(ExecutionEventType.CALLBACK_MISSING_JOB_SUCCEEDED)
+                .setPayload(stepOutcomePayload(step.getStepName(), message))
+                .setCreatedAt(now));
+
+        StepResultRequest synthetic = new StepResultRequest();
+        synthetic.setStatus(StepResultStatus.SUCCESS);
+        synthetic.setMessage(message);
+        completeStepSuccess(execution, step, synthetic, now);
+    }
+
+    private void completeStepSuccess(
+            WorkflowExecution execution,
+            StepExecution step,
+            StepResultRequest body,
+            Instant now
+    ) {
+        step.setStatus(StepExecutionStatus.SUCCESS)
+                .setFinishedAt(now)
+                .setUpdatedAt(now)
+                .setFailureReason(null);
+        stepExecutionRepository.save(step);
+
+        executionEventRepository.save(new ExecutionEvent()
+                .setWorkflowExecutionId(execution.getId())
+                .setEventType(ExecutionEventType.STEP_SUCCEEDED)
+                .setPayload(stepOutcomePayload(step.getStepName(), body))
+                .setCreatedAt(now));
 
         tryCompleteSucceededExecution(execution.getId(), now);
+    }
+
+    private String callbackReceivedPayload(String stepName, StepResultRequest body) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("stepName", stepName);
+        map.put("status", body.getStatus().name());
+        map.put("message", body.getMessage());
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private void tryCompleteSucceededExecution(Long executionId, Instant now) {
@@ -141,6 +206,18 @@ public class StepCallbackService {
             return objectMapper.writeValueAsString(map);
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Failed to serialize callback payload", e);
+        }
+    }
+
+    private String stepOutcomePayload(String stepName, String message) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("stepName", stepName);
+        map.put("message", message);
+        map.put("status", StepResultStatus.SUCCESS.name());
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
         }
     }
 }
