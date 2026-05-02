@@ -10,6 +10,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tim.workflow.orchestrator.domain.Workflow;
 import com.tim.workflow.orchestrator.domain.WorkflowVersion;
 import com.tim.workflow.orchestrator.dto.CreateWorkflowRequest;
+import com.tim.workflow.orchestrator.dto.WorkflowDetailResponse;
 import com.tim.workflow.orchestrator.dto.WorkflowResponse;
 import com.tim.workflow.orchestrator.repository.WorkflowRepository;
 import com.tim.workflow.orchestrator.repository.WorkflowVersionRepository;
@@ -70,6 +71,23 @@ public class WorkflowService {
                 workflow.getName(),
                 workflow.getDescription(),
                 workflow.getCurrentVersion()
+        );
+    }
+
+    public WorkflowDetailResponse getWorkflow(Long workflowId) {
+        Workflow workflow = workflowRepository.findById(workflowId)
+                .orElseThrow(() -> new IllegalArgumentException("Workflow not found: " + workflowId));
+    
+        WorkflowVersion version = workflowVersionRepository
+                .findByWorkflowIdAndVersionNumber(workflow.getId(), workflow.getCurrentVersion())
+                .orElseThrow(() -> new IllegalStateException("Workflow version not found"));
+    
+        return new WorkflowDetailResponse(
+                workflow.getId(),
+                workflow.getName(),
+                workflow.getDescription(),
+                workflow.getCurrentVersion(),
+                version.getDefinitionJson()
         );
     }
 }
