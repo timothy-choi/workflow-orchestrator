@@ -1,5 +1,6 @@
 package com.tim.workflow.orchestrator.k8s;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -10,9 +11,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tim.workflow.orchestrator.config.OrchestratorProperties;
+import com.tim.workflow.orchestrator.domain.ExecutionEvent;
+import com.tim.workflow.orchestrator.domain.ExecutionEventType;
 import com.tim.workflow.orchestrator.domain.StepExecution;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
+import com.tim.workflow.orchestrator.repository.ExecutionEventRepository;
+import com.tim.workflow.orchestrator.repository.StepExecutionRepository;
 
 import io.kubernetes.client.openapi.ApiException;
 import io.kubernetes.client.openapi.apis.BatchV1Api;
@@ -33,15 +40,24 @@ public class KubernetesJobDispatcher {
     private final BatchV1Api batchV1Api;
     private final OrchestratorProperties orchestratorProperties;
     private final KubernetesJobNameFactory jobNameFactory;
+    private final StepExecutionRepository stepExecutionRepository;
+    private final ExecutionEventRepository executionEventRepository;
+    private final ObjectMapper objectMapper;
 
     public KubernetesJobDispatcher(
             BatchV1Api batchV1Api,
             OrchestratorProperties orchestratorProperties,
-            KubernetesJobNameFactory jobNameFactory
+            KubernetesJobNameFactory jobNameFactory,
+            StepExecutionRepository stepExecutionRepository,
+            ExecutionEventRepository executionEventRepository,
+            ObjectMapper objectMapper
     ) {
         this.batchV1Api = batchV1Api;
         this.orchestratorProperties = orchestratorProperties;
         this.jobNameFactory = jobNameFactory;
+        this.stepExecutionRepository = stepExecutionRepository;
+        this.executionEventRepository = executionEventRepository;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -51,12 +67,34 @@ public class KubernetesJobDispatcher {
     public void dispatchJob(long workflowExecutionId, StepExecution step, WorkflowStepRequest stepDef)
             throws ApiException {
         String namespace = orchestratorProperties.getKubernetes().getNamespace();
-        String jobName = jobNameFactory.jobName(workflowExecutionId, step.getId());
+        String jobName = jobNameFactory.jobName(workflowExecutionId, step.getId(), step.getAttempt());
+        Instant now = Instant.now();
+
+        if (jobName.equals(step.getK8sJobName())) {
+            try {
+                batchV1Api.readNamespacedJob(jobName, namespace).execute();
+                saveJobEvent(
+                        workflowExecutionId,
+                        ExecutionEventType.JOB_ALREADY_EXISTS,
+                        jobName,
+                        now
+                );
+                log.info("Kubernetes Job {} already present; skipping create", jobName);
+                return;
+            } catch (ApiException e) {
+                if (e.getCode() != 404) {
+                    throw e;
+                }
+                saveJobEvent(workflowExecutionId, ExecutionEventType.JOB_MISSING, jobName, now);
+                log.warn("Recorded JOB_MISSING for {}; recreating", jobName);
+            }
+        }
 
         Map<String, String> labels = new LinkedHashMap<>();
         labels.put("app", "workflow-orchestrator");
         labels.put("executionId", String.valueOf(workflowExecutionId));
         labels.put("stepExecutionId", String.valueOf(step.getId()));
+        labels.put("attempt", String.valueOf(step.getAttempt()));
 
         String callbackUrl = callbackUrl();
 
@@ -66,7 +104,7 @@ public class KubernetesJobDispatcher {
         env.add(new V1EnvVar().name("CALLBACK_URL").value(callbackUrl));
         env.add(new V1EnvVar().name("CALLBACK_TOKEN").value(orchestratorProperties.getCallback().getToken()));
         env.add(new V1EnvVar().name("STEP_COMMAND").value(stepDef.getCommand()));
-        env.add(new V1EnvVar().name("STEP_TIMEOUT_SECONDS").value(String.valueOf(stepDef.getTimeoutSeconds())));
+        env.add(new V1EnvVar().name("STEP_TIMEOUT_SECONDS").value(String.valueOf(step.getTimeoutSeconds())));
 
         String workerImage = orchestratorProperties.getKubernetes().getWorkerImage();
 
@@ -87,7 +125,29 @@ public class KubernetesJobDispatcher {
                                 .spec(podSpec)));
 
         batchV1Api.createNamespacedJob(namespace, job).execute();
+
+        StepExecution managed = stepExecutionRepository.findById(step.getId()).orElseThrow();
+        managed.setK8sJobName(jobName).setUpdatedAt(now);
+        stepExecutionRepository.save(managed);
+
+        saveJobEvent(workflowExecutionId, ExecutionEventType.JOB_CREATED, jobName, now);
         log.info("Created Kubernetes Job {} in namespace {}", jobName, namespace);
+    }
+
+    private void saveJobEvent(Long executionId, ExecutionEventType type, String jobName, Instant now) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("jobName", jobName);
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+        executionEventRepository.save(new ExecutionEvent()
+                .setWorkflowExecutionId(executionId)
+                .setEventType(type)
+                .setPayload(json)
+                .setCreatedAt(now));
     }
 
     private String callbackUrl() {

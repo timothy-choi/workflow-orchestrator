@@ -10,6 +10,11 @@ public class StepExecutionResponse {
     private final Integer stepIndex;
     private final String stepName;
     private final StepExecutionStatus status;
+    private final Integer attempt;
+    private final Integer maxRetries;
+    private final Integer retryCount;
+    private final Integer timeoutSeconds;
+    private final String failureReason;
     private final Instant createdAt;
     private final Instant updatedAt;
 
@@ -18,6 +23,11 @@ public class StepExecutionResponse {
             Integer stepIndex,
             String stepName,
             StepExecutionStatus status,
+            Integer attempt,
+            Integer maxRetries,
+            Integer retryCount,
+            Integer timeoutSeconds,
+            String failureReason,
             Instant createdAt,
             Instant updatedAt
     ) {
@@ -25,6 +35,11 @@ public class StepExecutionResponse {
         this.stepIndex = stepIndex;
         this.stepName = stepName;
         this.status = status;
+        this.attempt = attempt;
+        this.maxRetries = maxRetries;
+        this.retryCount = retryCount;
+        this.timeoutSeconds = timeoutSeconds;
+        this.failureReason = failureReason;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
@@ -43,6 +58,26 @@ public class StepExecutionResponse {
 
     public StepExecutionStatus getStatus() {
         return status;
+    }
+
+    public Integer getAttempt() {
+        return attempt;
+    }
+
+    public Integer getMaxRetries() {
+        return maxRetries;
+    }
+
+    public Integer getRetryCount() {
+        return retryCount;
+    }
+
+    public Integer getTimeoutSeconds() {
+        return timeoutSeconds;
+    }
+
+    public String getFailureReason() {
+        return failureReason;
     }
 
     public Instant getCreatedAt() {

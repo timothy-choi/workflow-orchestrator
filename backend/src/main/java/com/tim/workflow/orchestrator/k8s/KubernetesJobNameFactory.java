@@ -5,17 +5,33 @@ import java.util.Locale;
 import org.springframework.stereotype.Component;
 
 /**
- * Builds RFC 1123 DNS subdomain Job names (≤63 chars) from execution and step ids.
+ * Builds Kubernetes Job names (≤63 chars) including execution id, step execution id, and attempt.
  */
 @Component
 public class KubernetesJobNameFactory {
 
     /**
-     * Compact deterministic name: {@code wf-e{hex}-s{hex}} (fits within 63 chars for all long values).
+     * Preferred name: {@code workflow-exec-{e}-step-{s}-attempt-{a}}. Falls back to a compact form if too long.
      */
-    public String jobName(long workflowExecutionId, long stepExecutionId) {
-        String name = String.format(Locale.ROOT, "wf-e%x-s%x", workflowExecutionId, stepExecutionId);
-        return sanitize(name);
+    public String jobName(long workflowExecutionId, long stepExecutionId, int attempt) {
+        String primary = String.format(
+                Locale.ROOT,
+                "workflow-exec-%d-step-%d-attempt-%d",
+                workflowExecutionId,
+                stepExecutionId,
+                attempt
+        );
+        if (primary.length() <= 63) {
+            return sanitize(primary);
+        }
+        String compact = String.format(
+                Locale.ROOT,
+                "wf-exec%x-st%x-a%d",
+                workflowExecutionId,
+                stepExecutionId,
+                attempt
+        );
+        return sanitize(compact);
     }
 
     String sanitize(String name) {

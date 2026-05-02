@@ -94,6 +94,10 @@ public class ExecutionService {
                     .setStepIndex(i)
                     .setStepName(stepRequest.getName())
                     .setStatus(StepExecutionStatus.PENDING)
+                    .setAttempt(1)
+                    .setRetryCount(0)
+                    .setMaxRetries(stepRequest.getMaxRetries())
+                    .setTimeoutSeconds(stepRequest.getTimeoutSeconds())
                     .setCreatedAt(now)
                     .setUpdatedAt(now);
             stepEntities.add(stepExecution);
@@ -159,6 +163,11 @@ public class ExecutionService {
                         s.getStepIndex(),
                         s.getStepName(),
                         s.getStatus(),
+                        s.getAttempt(),
+                        s.getMaxRetries(),
+                        s.getRetryCount(),
+                        s.getTimeoutSeconds(),
+                        s.getFailureReason(),
                         s.getCreatedAt(),
                         s.getUpdatedAt()
                 ))
