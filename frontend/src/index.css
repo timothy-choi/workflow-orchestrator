@@ -191,6 +191,11 @@ nav.top a:hover {
   text-decoration: underline;
 }
 
+nav.top a.active {
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
 nav.top .brand {
   margin-right: auto;
   color: #111827;

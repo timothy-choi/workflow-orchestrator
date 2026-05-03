@@ -60,7 +60,7 @@ export default function ExecutionsPage() {
   }
 
   function openRow(id) {
-    navigate(`/executions/${id}`);
+    navigate(`/ui/executions/${id}`);
   }
 
   return (
@@ -121,7 +121,7 @@ export default function ExecutionsPage() {
                 <td>{fmt(r.createdAt)}</td>
                 <td>{fmt(r.finishedAt)}</td>
                 <td onClick={(ev) => ev.stopPropagation()}>
-                  <Link to={`/executions/${r.id}`}>Details</Link>
+                  <Link to={`/ui/executions/${r.id}`}>Details</Link>
                 </td>
               </tr>
             ))}

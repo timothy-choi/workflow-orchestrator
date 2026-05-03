@@ -10,6 +10,11 @@ import {
   retryStep,
 } from '../api.js';
 
+/** Backend sends StepExecutionStatus as JSON string, e.g. "FAILED". */
+function isStepFailed(step) {
+  return String(step?.status ?? '').trim().toUpperCase() === 'FAILED';
+}
+
 export default function ExecutionDetailPage() {
   const { executionId } = useParams();
   const [exec, setExec] = useState(null);
@@ -149,7 +154,7 @@ export default function ExecutionDetailPage() {
                   <td>
                     <button
                       type="button"
-                      disabled={busy || s.status !== 'FAILED'}
+                      disabled={busy || !isStepFailed(s)}
                       onClick={() => run(() => retryStep(s.id))}
                     >
                       Retry failed step
