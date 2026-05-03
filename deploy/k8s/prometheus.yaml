@@ -14,7 +14,7 @@ data:
       - job_name: workflow-backend
         metrics_path: /actuator/prometheus
         static_configs:
-          - targets: ["backend.default.svc.cluster.local:8080"]
+          - targets: ["backend:8080"]
 ---
 apiVersion: apps/v1
 kind: Deployment

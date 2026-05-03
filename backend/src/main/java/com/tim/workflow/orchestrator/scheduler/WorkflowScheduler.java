@@ -118,39 +118,34 @@ public class WorkflowScheduler {
      * ({@code workflow.scheduler.tick-enabled=false} disables {@link #tick()} only).
      */
     public void runPollCycle() {
-        io.micrometer.core.instrument.Timer.Sample sample = workflowMetrics.startSchedulerLoopSample();
-        try {
-            log.info("Scheduler querying active executions statuses={}", SCHEDULER_ACTIVE_STATUSES);
-            List<WorkflowExecution> active =
-                    workflowExecutionRepository.findActiveForScheduler(SCHEDULER_ACTIVE_STATUSES);
-            log.info("Scheduler query finished activeExecutions={}", active.size());
-            if (log.isDebugEnabled()) {
-                log.debug(
-                        "Scheduler active execution ids={}",
-                        active.stream().map(WorkflowExecution::getId).toList());
-            }
+        log.info("Scheduler querying active executions statuses={}", SCHEDULER_ACTIVE_STATUSES);
+        List<WorkflowExecution> active =
+                workflowExecutionRepository.findActiveForScheduler(SCHEDULER_ACTIVE_STATUSES);
+        log.info("Scheduler query finished activeExecutions={}", active.size());
+        if (log.isDebugEnabled()) {
+            log.debug(
+                    "Scheduler active execution ids={}",
+                    active.stream().map(WorkflowExecution::getId).toList());
+        }
 
-            WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_STARTED");
-            try {
-                log.debug("Scheduler loop dispatch phase starting");
-            } finally {
-                WorkflowLogContext.clear();
-            }
-            for (WorkflowExecution execution : active) {
-                try {
-                    self.processExecution(execution.getId());
-                } catch (Exception e) {
-                    log.warn("Scheduler failed for execution {}", execution.getId(), e);
-                }
-            }
-            WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_COMPLETED");
-            try {
-                log.info("Scheduler loop completed");
-            } finally {
-                WorkflowLogContext.clear();
-            }
+        WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_STARTED");
+        try {
+            log.debug("Scheduler loop dispatch phase starting");
         } finally {
-            workflowMetrics.stopSchedulerLoopSample(sample);
+            WorkflowLogContext.clear();
+        }
+        for (WorkflowExecution execution : active) {
+            try {
+                self.processExecution(execution.getId());
+            } catch (Exception e) {
+                log.warn("Scheduler failed for execution {}", execution.getId(), e);
+            }
+        }
+        WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_COMPLETED");
+        try {
+            log.info("Scheduler loop completed");
+        } finally {
+            WorkflowLogContext.clear();
         }
     }
 
@@ -285,6 +280,8 @@ public class WorkflowScheduler {
                         .setPayload(stepPayload(running.getStepName()))
                         .setCreatedAt(runStart));
 
+                workflowMetrics.recordStepStarted();
+
                 WorkflowLogContext.put(executionId, running.getId(), inner.getWorkflowId(), running.getK8sJobName(), "STEP_CLAIMED");
                 try {
                     log.info("Step claimed stepName={}", running.getStepName());
@@ -310,7 +307,7 @@ public class WorkflowScheduler {
                                 .setEventType(ExecutionEventType.STEP_SUCCEEDED)
                                 .setPayload(stepPayload(runningFresh.getStepName()))
                                 .setCreatedAt(runEnd));
-                        workflowMetrics.recordStepTerminal(runningFresh.getStepName(), "SUCCESS", runStart, runEnd);
+                        workflowMetrics.recordStepSucceeded(runStart, runEnd);
                     } else if (runResult.isTimedOut()) {
                         stepRetryCoordinator.handleFailureWithDiagnostic(
                                 execState,
@@ -364,7 +361,7 @@ public class WorkflowScheduler {
                     .setFinishedAt(finished);
             workflowExecutionRepository.save(latest);
 
-            workflowMetrics.recordWorkflowTerminal(latest.getWorkflowId(), WorkflowExecutionStatus.SUCCEEDED, latest.getCreatedAt(), finished);
+            workflowMetrics.recordExecutionSucceeded(latest.getCreatedAt(), finished);
 
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(executionId)

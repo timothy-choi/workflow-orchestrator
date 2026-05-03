@@ -16,6 +16,8 @@ import com.tim.workflow.orchestrator.domain.WorkflowExecutionStatus;
 
 public interface StepExecutionRepository extends JpaRepository<StepExecution, Long> {
 
+    long countByStatus(StepExecutionStatus status);
+
     List<StepExecution> findByWorkflowExecutionIdOrderByStepIndexAsc(Long workflowExecutionId);
 
     Optional<StepExecution> findByWorkflowExecutionIdAndStepName(Long workflowExecutionId, String stepName);

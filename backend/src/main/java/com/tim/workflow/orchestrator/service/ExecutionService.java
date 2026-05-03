@@ -137,6 +137,8 @@ public class ExecutionService {
                 .setCreatedAt(now);
         executionEventRepository.save(createdEvent);
 
+        workflowMetrics.recordExecutionCreated();
+
         WorkflowLogContext.put(savedExecution.getId(), null, workflow.getId(), null, "EXECUTION_CREATED");
         try {
             log.info("Execution created workflowVersionId={}", version.getId());
@@ -213,6 +215,8 @@ public class ExecutionService {
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
+        workflowMetrics.recordExecutionPaused();
+
         executionEventRepository.save(new ExecutionEvent()
                 .setWorkflowExecutionId(executionId)
                 .setEventType(ExecutionEventType.EXECUTION_PAUSED)
@@ -245,6 +249,8 @@ public class ExecutionService {
                 .setPauseRequested(false)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
+
+        workflowMetrics.recordExecutionResumed();
 
         executionEventRepository.save(new ExecutionEvent()
                 .setWorkflowExecutionId(executionId)
@@ -284,9 +290,8 @@ public class ExecutionService {
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
-        Long workflowId = execution.getWorkflowId();
         Instant createdAt = execution.getCreatedAt();
-        workflowMetrics.recordWorkflowTerminal(workflowId, WorkflowExecutionStatus.CANCELLED, createdAt, now);
+        workflowMetrics.recordExecutionCancelled(createdAt, now);
 
         List<StepExecution> steps =
                 stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId);
@@ -294,7 +299,7 @@ public class ExecutionService {
             if (step.getStatus() == StepExecutionStatus.PENDING
                     || step.getStatus() == StepExecutionStatus.RETRY_WAIT) {
                 Instant startedSnapshot = step.getStartedAt();
-                workflowMetrics.recordStepTerminal(step.getStepName(), "CANCELLED", startedSnapshot, now);
+                workflowMetrics.recordStepTerminalDuration(startedSnapshot, now);
                 cancelStepRecord(step, now);
                 executionEventRepository.save(stepCancelledEvent(executionId, step.getStepName(), now));
             } else if (step.getStatus() == StepExecutionStatus.RUNNING) {
@@ -304,11 +309,14 @@ public class ExecutionService {
                     if (deleter != null) {
                         String jobName = step.getK8sJobName();
                         KubernetesJobDeleteOutcome outcome = deleter.deleteJobBestEffort(jobName);
+                        if (outcome.result() == KubernetesJobDeleteResult.DELETED) {
+                            workflowMetrics.recordKubernetesJobDeleted();
+                        }
                         recordKubernetesJobDeleteOutcomeForCancel(executionId, jobName, outcome, now);
                     }
                 }
                 Instant startedSnapshot = step.getStartedAt();
-                workflowMetrics.recordStepTerminal(step.getStepName(), "CANCELLED", startedSnapshot, now);
+                workflowMetrics.recordStepTerminalDuration(startedSnapshot, now);
                 cancelStepRecord(step, now);
                 executionEventRepository.save(stepCancelledEvent(executionId, step.getStepName(), now));
             }
@@ -320,7 +328,7 @@ public class ExecutionService {
                 .setPayload("{}")
                 .setCreatedAt(now));
 
-        WorkflowLogContext.put(executionId, null, workflowId, null, "EXECUTION_CANCELLED");
+        WorkflowLogContext.put(executionId, null, execution.getWorkflowId(), null, "EXECUTION_CANCELLED");
         try {
             log.info("Execution cancelled");
         } finally {
@@ -371,7 +379,7 @@ public class ExecutionService {
                 .setPayload(stepPayloadJson(step.getStepName()))
                 .setCreatedAt(now));
 
-        workflowMetrics.recordStepRetry(step.getStepName());
+        workflowMetrics.recordManualRetryRequested();
 
         WorkflowLogContext.put(execution.getId(), stepExecutionId, execution.getWorkflowId(), null, "STEP_MANUAL_RETRY_REQUESTED");
         try {
