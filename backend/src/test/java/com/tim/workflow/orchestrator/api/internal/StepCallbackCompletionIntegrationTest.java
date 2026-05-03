@@ -113,9 +113,9 @@ class StepCallbackCompletionIntegrationTest {
             stepExecutionRepository.save(s);
         });
 
-        double before = meterRegistry.counter("callbacks.received.total", "status", "SUCCESS").count();
+        double before = callbackReceivedCount("SUCCESS");
         postSuccess(executionId, stepId);
-        assertThat(meterRegistry.counter("callbacks.received.total", "status", "SUCCESS").count()).isGreaterThan(before);
+        assertThat(callbackReceivedCount("SUCCESS")).isGreaterThan(before);
     }
 
     @Test
@@ -129,13 +129,13 @@ class StepCallbackCompletionIntegrationTest {
             stepExecutionRepository.save(s);
         });
 
-        double before = meterRegistry.counter("callbacks.received.total", "status", "FAILED").count();
+        double before = callbackReceivedCount("FAILED");
         postFailed(executionId, stepId, "boom");
-        assertThat(meterRegistry.counter("callbacks.received.total", "status", "FAILED").count()).isGreaterThan(before);
+        assertThat(callbackReceivedCount("FAILED")).isGreaterThan(before);
     }
 
     @Test
-    void callbackWhenCancelled_incrementsIgnoredMetric() throws Exception {
+    void callbackWhenCancelled_doesNotIncrementSuccessCallbackMetric() throws Exception {
         Long workflowId = createWorkflow(step("metric-ignored", List.of()));
         Long executionId = executionService.createExecution(workflowId).getId();
         long stepId = stepExecutionRepository.findByWorkflowExecutionIdOrderByStepIndexAsc(executionId).get(0).getId();
@@ -147,7 +147,7 @@ class StepCallbackCompletionIntegrationTest {
         mockMvc.perform(post("/executions/" + executionId + "/cancel"))
                 .andExpect(status().isOk());
 
-        double before = meterRegistry.counter("callbacks.ignored.total", "reason", "EXECUTION_CANCELLED").count();
+        double callbacksBefore = callbackReceivedCount("SUCCESS");
 
         StepResultRequest body = new StepResultRequest();
         body.setExecutionId(executionId);
@@ -161,8 +161,7 @@ class StepCallbackCompletionIntegrationTest {
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isOk());
 
-        assertThat(meterRegistry.counter("callbacks.ignored.total", "reason", "EXECUTION_CANCELLED").count())
-                .isGreaterThan(before);
+        assertThat(callbackReceivedCount("SUCCESS")).isEqualTo(callbacksBefore);
     }
 
     @Test
@@ -226,5 +225,10 @@ class StepCallbackCompletionIntegrationTest {
         s.setCommand("echo " + name);
         s.setDependencies(deps);
         return s;
+    }
+
+    private double callbackReceivedCount(String status) {
+        var counter = meterRegistry.find("workflow_callbacks_received").tag("status", status).counter();
+        return counter != null ? counter.count() : 0.0;
     }
 }

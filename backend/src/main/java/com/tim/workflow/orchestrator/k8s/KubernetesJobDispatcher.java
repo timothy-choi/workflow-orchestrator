@@ -141,6 +141,7 @@ public class KubernetesJobDispatcher {
         stepExecutionRepository.save(managed);
 
         saveJobEvent(workflowExecutionId, ExecutionEventType.JOB_CREATED, jobName, now);
+        workflowMetrics.recordKubernetesJobCreated();
         WorkflowLogContext.put(workflowExecutionId, step.getId(), workflowId, jobName, "JOB_CREATED");
         try {
             log.info("Kubernetes Job created namespace={} jobName={}", namespace, jobName);

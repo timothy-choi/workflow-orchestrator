@@ -93,7 +93,6 @@ public class StepRetryCoordinator {
         }
 
         if (step.getRetryCount() < step.getMaxRetries()) {
-            Instant attemptStart = step.getStartedAt();
             int newRetryCount = step.getRetryCount() + 1;
             step.setRetryCount(newRetryCount)
                     .setAttempt(step.getAttempt() + 1)
@@ -105,8 +104,7 @@ public class StepRetryCoordinator {
                     .setUpdatedAt(now);
             stepExecutionRepository.save(step);
 
-            workflowMetrics.recordStepRetry(step.getStepName());
-            workflowMetrics.recordStepRetryWaitDuration(step.getStepName(), attemptStart, now);
+            workflowMetrics.recordAutomaticStepRetryScheduled();
 
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(execution.getId())
@@ -121,6 +119,7 @@ public class StepRetryCoordinator {
                 WorkflowLogContext.clear();
             }
         } else {
+            Instant stepStart = step.getStartedAt();
             step.setStatus(StepExecutionStatus.FAILED)
                     .setFailureReason(failureReason)
                     .setFinishedAt(now)
@@ -133,7 +132,7 @@ public class StepRetryCoordinator {
                     .setPayload(failurePayload(step.getStepName(), failureReason))
                     .setCreatedAt(now));
 
-            workflowMetrics.recordStepTerminal(step.getStepName(), "FAILED", step.getStartedAt(), now);
+            workflowMetrics.recordStepFailed(stepStart, now);
 
             if (execution.getStatus() == WorkflowExecutionStatus.RUNNING
                     || execution.getStatus() == WorkflowExecutionStatus.PAUSED) {
@@ -151,11 +150,7 @@ public class StepRetryCoordinator {
                         .setCreatedAt(now));
 
                 WorkflowExecution reloaded = workflowExecutionRepository.findById(execution.getId()).orElse(execution);
-                workflowMetrics.recordWorkflowTerminal(
-                        reloaded.getWorkflowId(),
-                        WorkflowExecutionStatus.FAILED,
-                        reloaded.getCreatedAt(),
-                        now);
+                workflowMetrics.recordExecutionFailed(reloaded.getCreatedAt(), now);
 
                 WorkflowLogContext.put(execution.getId(), step.getId(), reloaded.getWorkflowId(), null, "EXECUTION_FAILED");
                 try {

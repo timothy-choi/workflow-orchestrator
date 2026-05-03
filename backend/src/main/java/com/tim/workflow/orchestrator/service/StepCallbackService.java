@@ -82,14 +82,12 @@ public class StepCallbackService {
         Instant now = Instant.now();
 
         if (execution.getStatus() == WorkflowExecutionStatus.CANCELLED || execution.isCancelRequested()) {
-            workflowMetrics.recordCallbackIgnored("EXECUTION_CANCELLED");
             recordIgnoredCallback(execution.getId(), ExecutionEventType.CALLBACK_IGNORED_EXECUTION_CANCELLED,
                     step.getStepName(), body, now);
             return StepCallbackOutcome.IGNORED_CANCELLED;
         }
 
         if (step.getStatus() == StepExecutionStatus.CANCELLED) {
-            workflowMetrics.recordCallbackIgnored("STEP_CANCELLED");
             recordIgnoredCallback(execution.getId(), ExecutionEventType.CALLBACK_IGNORED_STEP_CANCELLED,
                     step.getStepName(), body, now);
             return StepCallbackOutcome.IGNORED_CANCELLED;
@@ -216,7 +214,7 @@ public class StepCallbackService {
                 .setFailureReason(null);
         stepExecutionRepository.save(step);
 
-        workflowMetrics.recordStepTerminal(step.getStepName(), "SUCCESS", startedAtSnapshot, now);
+        workflowMetrics.recordStepSucceeded(startedAtSnapshot, now);
 
         executionEventRepository.save(new ExecutionEvent()
                 .setWorkflowExecutionId(execution.getId())
@@ -259,7 +257,7 @@ public class StepCallbackService {
                     .setPauseRequested(false);
             workflowExecutionRepository.save(exec);
 
-            workflowMetrics.recordWorkflowTerminal(exec.getWorkflowId(), WorkflowExecutionStatus.SUCCEEDED, exec.getCreatedAt(), now);
+            workflowMetrics.recordExecutionSucceeded(exec.getCreatedAt(), now);
 
             executionEventRepository.save(new ExecutionEvent()
                     .setWorkflowExecutionId(executionId)
