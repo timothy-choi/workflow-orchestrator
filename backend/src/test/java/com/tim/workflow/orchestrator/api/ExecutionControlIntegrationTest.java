@@ -176,6 +176,7 @@ class ExecutionControlIntegrationTest {
         assertThat(retried.getStatus()).isEqualTo(WorkflowExecutionStatus.RUNNING);
         assertThat(retried.getSteps().get(0).getStatus()).isEqualTo(StepExecutionStatus.PENDING);
         assertThat(retried.getSteps().get(0).getAttempt()).isGreaterThan(failed.getSteps().get(0).getAttempt());
+        assertThat(retried.getSteps().get(0).getRetryCount()).isEqualTo(failed.getSteps().get(0).getRetryCount());
         assertThat(retried.getEvents())
                 .filteredOn(e -> e.getEventType() == ExecutionEventType.EXECUTION_FAILED)
                 .hasSize(1);
