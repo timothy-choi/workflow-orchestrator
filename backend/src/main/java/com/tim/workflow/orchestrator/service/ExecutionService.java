@@ -349,7 +349,6 @@ public class ExecutionService {
 
         Instant now = Instant.now();
         step.setAttempt(step.getAttempt() + 1)
-                .setRetryCount(step.getRetryCount() + 1)
                 .setStatus(StepExecutionStatus.PENDING)
                 .setFailureReason(null)
                 .setNextRetryAt(null)
