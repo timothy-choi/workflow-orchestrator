@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import ExecutionTimeline from '../components/ExecutionTimeline.jsx';
 import {
   cancelExecution,
   getExecution,
@@ -8,6 +9,11 @@ import {
   resumeExecution,
   retryStep,
 } from '../api.js';
+
+/** Backend sends StepExecutionStatus as JSON string, e.g. "FAILED". */
+function isStepFailed(step) {
+  return String(step?.status ?? '').trim().toUpperCase() === 'FAILED';
+}
 
 export default function ExecutionDetailPage() {
   const { executionId } = useParams();
@@ -70,83 +76,133 @@ export default function ExecutionDetailPage() {
   const canResume = status === 'PAUSED';
   const canCancel = status !== 'SUCCEEDED' && status !== 'CANCELLED' && status !== 'FAILED';
 
+  function execBadgeClass(s) {
+    const x = String(s ?? '').toLowerCase();
+    if (x === 'succeeded') return 'ok';
+    if (x === 'failed' || x === 'cancelled') return 'bad';
+    if (x === 'running' || x === 'created') return 'run';
+    if (x === 'paused') return 'warn';
+    return 'neutral';
+  }
+
   return (
     <>
       <p>
         <Link to="/executions">← Executions</Link>
       </p>
-      <h1>Execution {exec.id}</h1>
-      <p>
-        <span className="badge">{exec.status}</span>{' '}
-        <span className="muted">
-          workflow {exec.workflowId} · updated {fmt(exec.updatedAt)}
-        </span>
-      </p>
+
+      <header className="page-header">
+        <h1>Execution {exec.id}</h1>
+        <p className="muted exec-meta">
+          <span className={`badge badge-status badge-${execBadgeClass(status)}`}>{exec.status}</span>
+          <span>Workflow {exec.workflowId}</span>
+          <span>createdAt {fmt(exec.createdAt)}</span>
+          <span>finishedAt {fmt(exec.finishedAt)}</span>
+          <span>updated {fmt(exec.updatedAt)}</span>
+        </p>
+      </header>
+
       {error ? <p className="err">{error}</p> : null}
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Controls</h2>
-        <button type="button" disabled={busy || !canPause} onClick={() => run(() => pauseExecution(exec.id))}>
-          Pause
-        </button>
-        <button type="button" disabled={busy || !canResume} onClick={() => run(() => resumeExecution(exec.id))}>
-          Resume
-        </button>
-        <button
-          type="button"
-          className="danger"
-          disabled={busy || !canCancel}
-          onClick={() => run(() => cancelExecution(exec.id))}
-        >
-          Cancel
-        </button>
+        <div className="controls-bar">
+          <button type="button" disabled={busy || !canPause} onClick={() => run(() => pauseExecution(exec.id))}>
+            Pause
+          </button>
+          <button type="button" disabled={busy || !canResume} onClick={() => run(() => resumeExecution(exec.id))}>
+            Resume
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={busy || !canCancel}
+            onClick={() => run(() => cancelExecution(exec.id))}
+          >
+            Cancel
+          </button>
+        </div>
+        <p className="muted" style={{ marginBottom: 0, fontSize: 13 }}>
+          Retry appears per failed step in the table below.
+        </p>
       </div>
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Steps</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Attempt</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {exec.steps?.map((s) => (
-              <tr key={s.id}>
-                <td>{s.stepIndex}</td>
-                <td>{s.stepName}</td>
-                <td>
-                  <span className="badge">{s.status}</span>
-                </td>
-                <td>
-                  {s.attempt} / retries {s.retryCount}/{s.maxRetries}
-                </td>
-                <td>
-                  <button
-                    type="button"
-                    disabled={busy || s.status !== 'FAILED'}
-                    onClick={() => run(() => retryStep(s.id))}
-                  >
-                    Retry
-                  </button>
-                </td>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Attempt</th>
+                <th />
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {exec.steps?.map((s) => (
+                <tr key={s.id}>
+                  <td>{s.stepIndex}</td>
+                  <td>{s.stepName}</td>
+                  <td>
+                    <span className="badge">{s.status}</span>
+                  </td>
+                  <td>
+                    {s.attempt} / retries {s.retryCount}/{s.maxRetries}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      disabled={busy || !isStepFailed(s)}
+                      onClick={() => run(() => retryStep(s.id))}
+                    >
+                      Retry failed step
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <h2 style={{ marginTop: 0 }}>Status timeline</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Events in chronological order (same source as the events list).
+        </p>
+        <ExecutionTimeline events={events} formatTime={fmt} />
       </div>
 
       <div className="card">
         <h2 style={{ marginTop: 0 }}>Events ({events.length})</h2>
-        <pre className="events">
-          {(events || [])
-            .map((e) => `${e.createdAt}\t${e.eventType}\t${e.payload || ''}`)
-            .join('\n')}
-        </pre>
+        {events.length === 0 ? (
+          <p className="muted">No events.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>Payload</th>
+                </tr>
+              </thead>
+              <tbody>
+                {events.map((e) => (
+                  <tr key={e.id}>
+                    <td className="nowrap">{fmt(e.createdAt)}</td>
+                    <td>
+                      <code className="event-type">{e.eventType}</code>
+                    </td>
+                    <td className="payload-cell">{e.payload || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </>
   );

@@ -18,9 +18,158 @@ a {
 }
 
 .layout {
-  max-width: 960px;
+  max-width: 1100px;
   margin: 0 auto;
   padding: 1rem 1.25rem 3rem;
+}
+
+.page-header h1 {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+}
+
+.exec-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  align-items: center;
+}
+
+.controls-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+
+.controls-bar button {
+  margin-bottom: 0;
+}
+
+.table-wrap {
+  overflow-x: auto;
+  margin: 0 -0.25rem;
+}
+
+.data-table td.payload-cell {
+  font-size: 13px;
+  word-break: break-word;
+  max-width: 42rem;
+}
+
+td.nowrap {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+code.event-type {
+  font-size: 12px;
+  background: #f3f4f6;
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+}
+
+.click-row {
+  cursor: pointer;
+}
+
+.click-row:hover {
+  background: #f9fafb;
+}
+
+.badge-status.badge-ok {
+  background: #d1fae5;
+  color: #065f46;
+}
+
+.badge-status.badge-bad {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.badge-status.badge-run {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge-status.badge-warn {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge-status.badge-neutral {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.timeline-item {
+  position: relative;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  gap: 0.65rem 0.85rem;
+  padding-bottom: 1rem;
+}
+
+.timeline-item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 14px;
+  bottom: 0;
+  width: 2px;
+  background: #e5e7eb;
+}
+
+.timeline-marker {
+  width: 14px;
+  height: 14px;
+  margin-top: 3px;
+  border-radius: 50%;
+  background: #9ca3af;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #e5e7eb;
+  flex-shrink: 0;
+}
+
+.timeline-ok .timeline-marker {
+  background: #10b981;
+}
+
+.timeline-bad .timeline-marker {
+  background: #ef4444;
+}
+
+.timeline-warn .timeline-marker {
+  background: #f59e0b;
+}
+
+.timeline-neutral .timeline-marker {
+  background: #6b7280;
+}
+
+.timeline-time {
+  font-size: 12px;
+  color: #6b7280;
+  font-variant-numeric: tabular-nums;
+}
+
+.timeline-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.timeline-payload {
+  font-size: 12px;
+  margin-top: 0.2rem;
+  line-height: 1.4;
 }
 
 nav.top {
@@ -40,6 +189,11 @@ nav.top a {
 
 nav.top a:hover {
   text-decoration: underline;
+}
+
+nav.top a.active {
+  color: #1d4ed8;
+  font-weight: 700;
 }
 
 nav.top .brand {
