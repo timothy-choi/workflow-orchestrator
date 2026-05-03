@@ -1,7 +1,6 @@
 package com.tim.workflow.orchestrator.scheduler;
 
 import java.time.Instant;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,10 +38,17 @@ import com.tim.workflow.orchestrator.service.StepRetryCoordinator;
 
 import io.kubernetes.client.openapi.ApiException;
 
+import jakarta.persistence.EntityManager;
+
 @Component
 public class WorkflowScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(WorkflowScheduler.class);
+
+    /** Statuses polled each scheduler sweep ({@link WorkflowExecutionStatus#CREATED} is promoted inside {@link #processExecution}). */
+    private static final List<WorkflowExecutionStatus> SCHEDULER_ACTIVE_STATUSES = List.of(
+            WorkflowExecutionStatus.CREATED,
+            WorkflowExecutionStatus.RUNNING);
 
     private final WorkflowExecutionRepository workflowExecutionRepository;
     private final WorkflowVersionRepository workflowVersionRepository;
@@ -56,6 +62,8 @@ public class WorkflowScheduler {
     private final ObjectMapper objectMapper;
     private final WorkflowScheduler self;
     private final WorkflowMetrics workflowMetrics;
+
+    private final EntityManager entityManager;
 
     private final boolean tickEnabled;
 
@@ -72,6 +80,7 @@ public class WorkflowScheduler {
             ObjectMapper objectMapper,
             @Lazy WorkflowScheduler self,
             WorkflowMetrics workflowMetrics,
+            EntityManager entityManager,
             @Value("${workflow.scheduler.tick-enabled:true}") boolean tickEnabled
     ) {
         this.workflowExecutionRepository = workflowExecutionRepository;
@@ -86,6 +95,7 @@ public class WorkflowScheduler {
         this.objectMapper = objectMapper;
         this.self = self;
         this.workflowMetrics = workflowMetrics;
+        this.entityManager = entityManager;
         this.tickEnabled = tickEnabled;
     }
 
@@ -100,13 +110,29 @@ public class WorkflowScheduler {
         if (!tickEnabled) {
             return;
         }
+        runPollCycle();
+    }
+
+    /**
+     * One scheduling sweep: load active executions and process each. Exposed for integration tests
+     * ({@code workflow.scheduler.tick-enabled=false} disables {@link #tick()} only).
+     */
+    public void runPollCycle() {
         io.micrometer.core.instrument.Timer.Sample sample = workflowMetrics.startSchedulerLoopSample();
         try {
-            List<WorkflowExecution> active = workflowExecutionRepository.findByStatusIn(
-                    EnumSet.of(WorkflowExecutionStatus.CREATED, WorkflowExecutionStatus.RUNNING));
+            log.info("Scheduler querying active executions statuses={}", SCHEDULER_ACTIVE_STATUSES);
+            List<WorkflowExecution> active =
+                    workflowExecutionRepository.findActiveForScheduler(SCHEDULER_ACTIVE_STATUSES);
+            log.info("Scheduler query finished activeExecutions={}", active.size());
+            if (log.isDebugEnabled()) {
+                log.debug(
+                        "Scheduler active execution ids={}",
+                        active.stream().map(WorkflowExecution::getId).toList());
+            }
+
             WorkflowLogContext.put(null, null, null, null, "SCHEDULER_TICK_STARTED");
             try {
-                log.info("Scheduler loop started activeExecutions={}", active.size());
+                log.debug("Scheduler loop dispatch phase starting");
             } finally {
                 WorkflowLogContext.clear();
             }
@@ -136,8 +162,12 @@ public class WorkflowScheduler {
         WorkflowExecution execution = workflowExecutionRepository.findLockedById(executionId)
                 .orElseThrow(() -> new IllegalStateException("Workflow execution not found: " + executionId));
 
+        entityManager.refresh(execution);
+
         if (execution.getStatus() == WorkflowExecutionStatus.PAUSED
-                || execution.getStatus() == WorkflowExecutionStatus.CANCELLED) {
+                || execution.isPauseRequested()
+                || execution.getStatus() == WorkflowExecutionStatus.CANCELLED
+                || execution.isCancelRequested()) {
             return;
         }
 
@@ -150,6 +180,12 @@ public class WorkflowScheduler {
         if (execution.getStatus() == WorkflowExecutionStatus.CREATED) {
             execution.setStatus(WorkflowExecutionStatus.RUNNING).setUpdatedAt(now);
             workflowExecutionRepository.save(execution);
+        }
+
+        workflowExecutionRepository.flush();
+        entityManager.refresh(execution);
+        if (execution.getStatus() == WorkflowExecutionStatus.PAUSED || execution.isPauseRequested()) {
+            return;
         }
 
         WorkflowLogContext.put(executionId, null, execution.getWorkflowId(), null, "PROCESS_EXECUTION");
@@ -166,16 +202,31 @@ public class WorkflowScheduler {
         CreateWorkflowRequest definition = parseDefinition(version.getDefinitionJson());
 
         promoteRetryWaitSteps(executionId, execution.getStatus(), now, execution.getWorkflowId());
+
+        workflowExecutionRepository.flush();
+        entityManager.refresh(execution);
+        if (execution.getStatus() == WorkflowExecutionStatus.PAUSED || execution.isPauseRequested()) {
+            return;
+        }
+
         failTimedOutRunningSteps(execution, executionId, now);
 
-        if (execution.getStatus() == WorkflowExecutionStatus.FAILED) {
+        workflowExecutionRepository.flush();
+        entityManager.refresh(execution);
+        if (execution.getStatus() == WorkflowExecutionStatus.FAILED
+                || execution.getStatus() == WorkflowExecutionStatus.PAUSED
+                || execution.isPauseRequested()) {
             return;
         }
 
         while (true) {
             workflowExecutionRepository.flush();
             WorkflowExecution current = workflowExecutionRepository.findById(executionId).orElseThrow();
+            entityManager.refresh(current);
             if (current.getStatus() == WorkflowExecutionStatus.CANCELLED || current.isCancelRequested()) {
+                break;
+            }
+            if (current.getStatus() == WorkflowExecutionStatus.PAUSED || current.isPauseRequested()) {
                 break;
             }
             if (current.getStatus() == WorkflowExecutionStatus.FAILED) {
@@ -198,7 +249,11 @@ public class WorkflowScheduler {
             for (WorkflowStepRequest stepDef : runnableDefs) {
                 workflowExecutionRepository.flush();
                 WorkflowExecution inner = workflowExecutionRepository.findById(executionId).orElseThrow();
+                entityManager.refresh(inner);
                 if (inner.getStatus() == WorkflowExecutionStatus.CANCELLED || inner.isCancelRequested()) {
+                    break;
+                }
+                if (inner.getStatus() == WorkflowExecutionStatus.PAUSED || inner.isPauseRequested()) {
                     break;
                 }
 
@@ -301,7 +356,8 @@ public class WorkflowScheduler {
 
         workflowExecutionRepository.flush();
         WorkflowExecution latest = workflowExecutionRepository.findById(executionId).orElseThrow();
-        if (allSuccess && latest.getStatus() == WorkflowExecutionStatus.RUNNING) {
+        entityManager.refresh(latest);
+        if (allSuccess && latest.getStatus() == WorkflowExecutionStatus.RUNNING && !latest.isPauseRequested()) {
             Instant finished = Instant.now();
             latest.setStatus(WorkflowExecutionStatus.SUCCEEDED)
                     .setUpdatedAt(finished)

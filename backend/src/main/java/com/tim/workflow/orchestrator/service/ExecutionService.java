@@ -33,6 +33,8 @@ import com.tim.workflow.orchestrator.dto.ExecutionResponse;
 import com.tim.workflow.orchestrator.dto.ExecutionSummaryResponse;
 import com.tim.workflow.orchestrator.dto.StepExecutionResponse;
 import com.tim.workflow.orchestrator.dto.WorkflowStepRequest;
+import com.tim.workflow.orchestrator.k8s.KubernetesJobDeleteOutcome;
+import com.tim.workflow.orchestrator.k8s.KubernetesJobDeleteResult;
 import com.tim.workflow.orchestrator.k8s.KubernetesJobDeleter;
 import com.tim.workflow.orchestrator.logging.WorkflowLogContext;
 import com.tim.workflow.orchestrator.metrics.WorkflowMetrics;
@@ -102,6 +104,7 @@ public class ExecutionService {
                 .setWorkflowId(workflow.getId())
                 .setWorkflowVersionId(version.getId())
                 .setStatus(WorkflowExecutionStatus.CREATED)
+                .setPauseRequested(false)
                 .setCancelRequested(false)
                 .setCreatedAt(now)
                 .setUpdatedAt(now);
@@ -206,6 +209,7 @@ public class ExecutionService {
         Instant now = Instant.now();
         execution.setStatus(WorkflowExecutionStatus.PAUSED)
                 .setPausedAt(now)
+                .setPauseRequested(true)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
@@ -238,6 +242,7 @@ public class ExecutionService {
         Instant now = Instant.now();
         execution.setStatus(WorkflowExecutionStatus.RUNNING)
                 .setPausedAt(null)
+                .setPauseRequested(false)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
@@ -275,6 +280,7 @@ public class ExecutionService {
                 .setCancelledAt(now)
                 .setFinishedAt(now)
                 .setPausedAt(null)
+                .setPauseRequested(false)
                 .setUpdatedAt(now);
         workflowExecutionRepository.save(execution);
 
@@ -296,7 +302,9 @@ public class ExecutionService {
                         && step.getK8sJobName() != null && !step.getK8sJobName().isBlank()) {
                     KubernetesJobDeleter deleter = kubernetesJobDeleter.getIfAvailable();
                     if (deleter != null) {
-                        deleter.deleteJobIfPresent(step.getK8sJobName());
+                        String jobName = step.getK8sJobName();
+                        KubernetesJobDeleteOutcome outcome = deleter.deleteJobBestEffort(jobName);
+                        recordKubernetesJobDeleteOutcomeForCancel(executionId, jobName, outcome, now);
                     }
                 }
                 Instant startedSnapshot = step.getStartedAt();
@@ -404,6 +412,43 @@ public class ExecutionService {
                 .setCreatedAt(now);
     }
 
+    private void recordKubernetesJobDeleteOutcomeForCancel(
+            Long executionId,
+            String jobName,
+            KubernetesJobDeleteOutcome outcome,
+            Instant now
+    ) {
+        if (outcome.result() == KubernetesJobDeleteResult.NOT_FOUND) {
+            executionEventRepository.save(new ExecutionEvent()
+                    .setWorkflowExecutionId(executionId)
+                    .setEventType(ExecutionEventType.JOB_NOT_FOUND)
+                    .setPayload(kubernetesJobOutcomePayload(jobName, outcome.httpStatus(), outcome.message()))
+                    .setCreatedAt(now));
+        } else if (outcome.result() == KubernetesJobDeleteResult.DELETE_FAILED) {
+            executionEventRepository.save(new ExecutionEvent()
+                    .setWorkflowExecutionId(executionId)
+                    .setEventType(ExecutionEventType.JOB_ALREADY_FINISHED)
+                    .setPayload(kubernetesJobOutcomePayload(jobName, outcome.httpStatus(), outcome.message()))
+                    .setCreatedAt(now));
+        }
+    }
+
+    private String kubernetesJobOutcomePayload(String jobName, Integer httpStatus, String message) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("jobName", jobName);
+        if (httpStatus != null) {
+            map.put("httpStatus", httpStatus);
+        }
+        if (message != null && !message.isBlank()) {
+            map.put("message", message);
+        }
+        try {
+            return objectMapper.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     private String stepPayloadJson(String stepName) {
         try {
             return objectMapper.writeValueAsString(Map.of("stepName", stepName));
@@ -470,6 +515,7 @@ public class ExecutionService {
                 execution.getUpdatedAt(),
                 execution.getFinishedAt(),
                 execution.getPausedAt(),
+                execution.isPauseRequested(),
                 execution.isCancelRequested(),
                 execution.getCancelledAt(),
                 stepResponses,

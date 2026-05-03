@@ -25,11 +25,11 @@ public class KubernetesJobDeleter {
     }
 
     /**
-     * Deletes a Job if it exists; ignores 404.
+     * Deletes a Job if it exists. Never throws; callers decide how to record outcomes.
      */
-    public void deleteJobIfPresent(String jobName) {
+    public KubernetesJobDeleteOutcome deleteJobBestEffort(String jobName) {
         if (jobName == null || jobName.isBlank()) {
-            return;
+            return KubernetesJobDeleteOutcome.skippedNoName();
         }
         String ns = orchestratorProperties.getKubernetes().getNamespace();
         try {
@@ -37,13 +37,22 @@ public class KubernetesJobDeleter {
                     .propagationPolicy("Background")
                     .execute();
             log.info("Deleted Kubernetes Job {} in namespace {}", jobName, ns);
+            return KubernetesJobDeleteOutcome.deleted();
         } catch (ApiException e) {
-            if (e.getCode() == 404) {
+            if (isNotFound(e)) {
                 log.debug("Kubernetes Job {} not found for delete", jobName);
-                return;
+                return KubernetesJobDeleteOutcome.notFound(e.getCode(), e.getMessage());
             }
             log.warn("Failed to delete Kubernetes Job {}: {}", jobName, e.getMessage());
-            throw new IllegalStateException("Failed to delete Kubernetes Job: " + jobName, e);
+            return KubernetesJobDeleteOutcome.deleteFailed(e.getCode(), e.getMessage());
         }
+    }
+
+    private static boolean isNotFound(ApiException e) {
+        if (e.getCode() == 404) {
+            return true;
+        }
+        String body = e.getResponseBody();
+        return body != null && body.toLowerCase().contains("notfound");
     }
 }

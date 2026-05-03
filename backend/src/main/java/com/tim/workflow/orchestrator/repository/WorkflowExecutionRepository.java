@@ -19,6 +19,12 @@ public interface WorkflowExecutionRepository extends JpaRepository<WorkflowExecu
 
     List<WorkflowExecution> findByStatusIn(Collection<WorkflowExecutionStatus> statuses);
 
+    /**
+     * Active executions eligible for scheduling (created but not yet finished workflow lifecycle).
+     */
+    @Query("SELECT e FROM WorkflowExecution e WHERE e.status IN :statuses ORDER BY e.id ASC")
+    List<WorkflowExecution> findActiveForScheduler(@Param("statuses") Collection<WorkflowExecutionStatus> statuses);
+
     long countByStatusIn(Collection<WorkflowExecutionStatus> statuses);
 
     List<WorkflowExecution> findAllByOrderByCreatedAtDesc(Pageable pageable);

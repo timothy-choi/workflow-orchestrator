@@ -41,6 +41,9 @@ public class WorkflowExecution {
     @Column(name = "paused_at")
     private Instant pausedAt;
 
+    @Column(name = "pause_requested", nullable = false)
+    private boolean pauseRequested;
+
     @Column(name = "cancel_requested", nullable = false)
     private boolean cancelRequested;
 
@@ -111,6 +114,15 @@ public class WorkflowExecution {
 
     public WorkflowExecution setPausedAt(Instant pausedAt) {
         this.pausedAt = pausedAt;
+        return this;
+    }
+
+    public boolean isPauseRequested() {
+        return pauseRequested;
+    }
+
+    public WorkflowExecution setPauseRequested(boolean pauseRequested) {
+        this.pauseRequested = pauseRequested;
         return this;
     }
 
